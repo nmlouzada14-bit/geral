@@ -39,6 +39,20 @@ Faça backup consistente do SQLite usando a API de backup do SQLite, junto com `
 
 Nenhuma conta, contratação ou publicação no Render é realizada automaticamente por este repositório.
 
+## Publicar na VPS com EasyPanel (recomendado para a VPS existente)
+
+O EasyPanel e seu Traefik já gerenciam as portas 80/443. Crie um projeto/serviço separado; não altere os serviços n8n, Evolution API ou o proxy.
+
+1. No EasyPanel, crie o projeto `contentos` e um serviço do tipo **App**, chamado `web`.
+2. Configure a origem GitHub: `https://github.com/nmlouzada14-bit/geral`, branch `main`, contexto `/`. Se o repositório for privado, use a integração GitHub/chave de deploy do painel; não coloque tokens na URL.
+3. Escolha o método de build **Dockerfile**, caminho `Dockerfile`. O comando de início já está definido na imagem.
+4. Configure as variáveis de ambiente no painel: `INITIAL_PASSWORD` com a senha inicial escolhida (sem aspas no campo), `DATA_DIR=/data`, `PORT=8000`, `COOKIE_SECURE=1`.
+5. Em armazenamento/mounts, adicione um **volume nomeado** `contentos-data` com destino `/data`, antes do primeiro deploy. Mantenha uma réplica. Use volume Docker, não um diretório do host sem configuração de permissões: a imagem roda com UID/GID 10001 e prepara `/data` para esse usuário.
+6. Em domínios, use o domínio HTTPS gerado pelo painel ou um subdomínio próprio, encaminhando para HTTP na porta interna `8000`. Não exponha uma nova porta pública 80/443/8000: use o Traefik existente. Para domínio próprio, configure previamente o DNS para o IP da VPS.
+7. Faça o deploy. Valide `/healthz` (HTTP 200 e `ok: true`), o login inicial e a troca de senha. Cadastre um integrante e uma tarefa; confira em outro navegador. Reinicie somente o serviço `contentos/web` e confirme que tarefa, acesso e anexo continuam presentes.
+
+A imagem não contém `.env`, dados locais, chave de sessão ou credenciais StayCloud. O volume guarda o SQLite, os anexos e a chave de sessão. Não remova esse volume ao atualizar o serviço.
+
 ## Publicar na StayCloud
 
 O projeto pode ser conectado com a CLI oficial `@staysdev/setup`. O token de acesso fica em `.staycloud/credentials.json` (ignorado pelo Git e com permissão 600). Nunca versione ou envie esse arquivo.
