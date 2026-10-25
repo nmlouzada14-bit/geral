@@ -39,6 +39,21 @@ Faça backup consistente do SQLite usando a API de backup do SQLite, junto com `
 
 Nenhuma conta, contratação ou publicação no Render é realizada automaticamente por este repositório.
 
+## Publicar na StayCloud
+
+O projeto pode ser conectado com a CLI oficial `@staysdev/setup`. O token de acesso fica em `.staycloud/credentials.json` (ignorado pelo Git e com permissão 600). Nunca versione ou envie esse arquivo.
+
+O build Python foi aceito pela StayCloud. O `Procfile` define Gunicorn em `0.0.0.0` e usa a porta `PORT` fornecida pela hospedagem, com fallback 8000. A publicação só está pronta após validar `/healthz`, login e persistência.
+
+No painel do projeto configure:
+
+- `INITIAL_PASSWORD`: senha inicial escolhida, em campo seguro; não incluir no código.
+- `COOKIE_SECURE=1` para HTTPS.
+- `DATA_DIR`: caminho de um volume persistente realmente montado, por exemplo `/data/contentos`. Definir só a variável não cria um volume.
+- Uma única instância com esse volume; o SQLite e os anexos não podem depender do disco temporário do container.
+
+A CLI de conexão/deploy utilizada não expõe configuração de variáveis e volumes. Se o painel não disponibilizar essas opções, é necessário configurar o serviço na VPS ou usar uma hospedagem que ofereça essas capacidades antes de operar com dados reais. Não substituir o banco compartilhado por dados locais do navegador.
+
 ## Regras de uso
 
 - Semana de segunda a domingo; deadlines sem horário, com atraso calculado pela data de São Paulo.
