@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: contentos-zayed
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120 app:app
+    healthCheckPath: /healthz
+    disk:
+      name: contentos-data
+      mountPath: /var/data/contentos
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.14
+      - key: DATA_DIR
+        value: /var/data/contentos
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: INITIAL_PASSWORD
+        sync: false
