@@ -25,6 +25,7 @@ app.config.update(SECRET_KEY=secret_file.read_text(), MAX_CONTENT_LENGTH=20*1024
     SESSION_COOKIE_SECURE=os.environ.get('COOKIE_SECURE') == '1',
     PERMANENT_SESSION_LIFETIME=timedelta(hours=12))
 ADMIN = 'nmlouzada14@gmail.com'
+DONE = ('Finalizado', 'Agendado', 'Postado')
 STATES = ['Pendente', 'Em andamento', 'Revisão', 'Finalizado', 'Agendado', 'Postado', 'Atrasado']
 
 def db():
@@ -37,6 +38,17 @@ def today():
     return datetime.now(ZoneInfo('America/Sao_Paulo')).date()
 
 def init():
+    # Preserve a consistent pre-migration snapshot, including WAL contents.
+    with db() as source:
+        old = source.execute("SELECT 1 FROM sqlite_master WHERE name='tasks'").fetchone()
+        version = source.execute('PRAGMA user_version').fetchone()[0]
+        if old and version < 2:
+            backup = DATA / 'backups' / 'before-v2.sqlite'
+            backup.parent.mkdir(exist_ok=True)
+            if not backup.exists():
+                with sqlite3.connect(backup) as target:
+                    source.backup(target)
+                os.chmod(backup, 0o600)
     with db() as c:
         c.executescript('''
         PRAGMA journal_mode=WAL;
@@ -47,6 +59,20 @@ def init():
         CREATE TABLE IF NOT EXISTS attachments(id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), name TEXT NOT NULL, disk TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS login_attempts(key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset_at REAL NOT NULL);
         ''')
+        c.execute('BEGIN IMMEDIATE')
+        if c.execute('PRAGMA user_version').fetchone()[0] < 2:
+            columns = {r['name'] for r in c.execute('PRAGMA table_info(tasks)')}
+            if 'completed_at' not in columns:
+                c.execute('ALTER TABLE tasks ADD COLUMN completed_at TEXT')
+            c.execute('CREATE TABLE IF NOT EXISTS task_channels(task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, channel_id INTEGER NOT NULL REFERENCES channels(id), PRIMARY KEY(task_id,channel_id))')
+            c.execute('CREATE TABLE IF NOT EXISTS format_channels(format_id INTEGER NOT NULL REFERENCES formats(id) ON DELETE CASCADE, channel_id INTEGER NOT NULL REFERENCES channels(id), PRIMARY KEY(format_id,channel_id))')
+            c.execute('INSERT OR IGNORE INTO task_channels SELECT id,channel_id FROM tasks WHERE channel_id IS NOT NULL')
+            c.execute('INSERT OR IGNORE INTO format_channels SELECT id,channel_id FROM formats WHERE channel_id IS NOT NULL')
+            c.execute('CREATE TABLE IF NOT EXISTS comments(id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, author_id INTEGER NOT NULL REFERENCES users(id), body TEXT NOT NULL, created_at TEXT NOT NULL)')
+            c.execute('CREATE TABLE IF NOT EXISTS comment_mentions(comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id), read_at TEXT, PRIMARY KEY(comment_id,user_id))')
+            c.execute('CREATE INDEX IF NOT EXISTS tasks_deadline ON tasks(deadline)')
+            c.execute('CREATE INDEX IF NOT EXISTS comments_task ON comments(task_id,id)')
+            c.execute('PRAGMA user_version=2')
         if not c.execute('SELECT id FROM users WHERE email=?', (ADMIN,)).fetchone():
             pw = os.environ.get('INITIAL_PASSWORD')
             if not pw or len(pw) < 7:
@@ -193,54 +219,189 @@ def channels():
     with db() as c: c.execute('INSERT INTO channels(name,url,color) VALUES(?,?,?)',(text(d,'name'),url,color(d['color'])))
     return {'ok':True},201
 
-@app.route('/api/formats', methods=['POST'])
+def channel_ids(c, d, required=False):
+    values = d.get('channel_ids') if 'channel_ids' in d else ([d['channel_id']] if d.get('channel_id') else [])
+    if not isinstance(values, list) or len(values) > 50: abort(400, 'Selecione até 50 canais.')
+    ids = sorted({ref(c, 'channels', v, True) for v in values})
+    if required and not ids: abort(400, 'Selecione pelo menos um canal.')
+    return ids
+
+
+def linked_channels(c, kind, id):
+    return [r[0] for r in c.execute(f'SELECT channel_id FROM {kind}_channels WHERE {kind}_id=? ORDER BY channel_id', (id,))]
+
+
+def set_channels(c, kind, id, ids):
+    c.execute(f'DELETE FROM {kind}_channels WHERE {kind}_id=?', (id,))
+    c.executemany(f'INSERT INTO {kind}_channels({kind}_id,channel_id) VALUES(?,?)', [(id, ch) for ch in ids])
+
+
+def now():
+    return datetime.now(ZoneInfo('America/Sao_Paulo')).isoformat(timespec='seconds')
+
+
+@app.post('/api/formats')
 @auth()
 def formats():
     d=request.get_json(); freq=frequency(d['frequency'])
     if not freq: abort(400,'Escolha pelo menos um dia e quantidade.')
     with db() as c:
-        c.execute('INSERT INTO formats(name,channel_id,responsible_id,color,frequency,active_from) VALUES(?,?,?,?,?,?)',
-            (text(d,'name'),ref(c,'channels',d.get('channel_id'),True),ref(c,'users',d.get('responsible_id'),True),color(d['color']),json.dumps(freq),iso(d['active_from'])))
+        ids=channel_ids(c,d,True)
+        inherited=c.execute('SELECT color FROM channels WHERE id=?',(ids[0],)).fetchone()[0]
+        cur=c.execute('INSERT INTO formats(name,channel_id,responsible_id,color,frequency,active_from) VALUES(?,?,?,?,?,?)',
+            (text(d,'name'),ids[0],ref(c,'users',d.get('responsible_id'),True),inherited,json.dumps(freq),iso(d['active_from'])))
+        set_channels(c,'format',cur.lastrowid,ids)
     return {'ok':True},201
+
 
 @app.patch('/api/formats/<int:id>')
 @auth()
-def pause(id):
+def update_format(id):
     d=request.get_json()
-    if type(d.get('active')) is not bool: abort(400,'Estado inválido.')
     with db() as c:
-        if not c.execute('UPDATE formats SET active=? WHERE id=?',(int(d['active']),id)).rowcount: abort(404)
+        c.execute('BEGIN IMMEDIATE')
+        old=c.execute('SELECT * FROM formats WHERE id=?',(id,)).fetchone()
+        if not old: abort(404)
+        if set(d)=={'active'}:
+            if type(d['active']) is not bool: abort(400,'Estado inválido.')
+            c.execute('UPDATE formats SET active=? WHERE id=?',(int(d['active']),id))
+        else:
+            ids=channel_ids(c,d,True); freq=frequency(d['frequency'])
+            if not freq: abort(400,'Escolha pelo menos um dia.')
+            inherited=c.execute('SELECT color FROM channels WHERE id=?',(ids[0],)).fetchone()[0]
+            c.execute('UPDATE formats SET name=?,channel_id=?,responsible_id=?,color=?,frequency=?,active_from=? WHERE id=?',
+                (text(d,'name'),ids[0],ref(c,'users',d.get('responsible_id'),True),inherited,json.dumps(freq),iso(d['active_from']),id))
+            set_channels(c,'format',id,ids)
+            # Existing deliveries remain as edited by the team; only new slots inherit changes.
     return {'ok':True}
+
 
 def generate(c,start,end):
     for f in c.execute('SELECT * FROM formats WHERE active=1').fetchall():
         freq=json.loads(f['frequency']); day=max(start,date.fromisoformat(f['active_from']))
+        ids=linked_channels(c,'format',f['id'])
         while day<=end:
             for n in range(freq.get(str(day.weekday()),0)):
                 slot=f"{f['id']}:{day}:{n}"
-                c.execute('INSERT OR IGNORE INTO tasks(title,deadline,responsible_id,channel_id,format_id,status,frequency,slot) VALUES(?,?,?,?,?,?,?,?)',
-                    (f"{f['name']} · {n+1}",str(day),f['responsible_id'],f['channel_id'],f['id'],'Pendente',f['frequency'],slot))
+                cur=c.execute('INSERT OR IGNORE INTO tasks(title,deadline,responsible_id,channel_id,format_id,status,frequency,slot) VALUES(?,?,?,?,?,?,?,?)',
+                    (f"{f['name']} · {n+1}",str(day),f['responsible_id'],ids[0] if ids else None,f['id'],'Pendente',f['frequency'],slot))
+                if cur.rowcount: set_channels(c,'task',cur.lastrowid,ids)
             day+=timedelta(days=1)
 
-@app.get('/api/state')
-@auth()
-def state():
+
+def date_range():
     start=date.fromisoformat(request.args.get('start',str(today())))
     end=date.fromisoformat(request.args.get('end',str(start+timedelta(days=6))))
     if not 0<=(end-start).days<=92: abort(400,'Escolha um intervalo de até 93 dias.')
     if start<today()-timedelta(days=730) or end>today()+timedelta(days=730): abort(400,'Escolha um período dentro de dois anos.')
+    return start,end
+
+
+def enrich_tasks(c, tasks):
+    if not tasks: return tasks
+    ids={t['id'] for t in tasks}
+    links={}; attachments={}
+    for r in c.execute('SELECT task_id,channel_id FROM task_channels ORDER BY channel_id'):
+        if r['task_id'] in ids: links.setdefault(r['task_id'],[]).append(r['channel_id'])
+    for r in c.execute('SELECT id,task_id,name FROM attachments'):
+        if r['task_id'] in ids: attachments.setdefault(r['task_id'],[]).append(dict(r))
+    for t in tasks:
+        t['channel_ids']=links.get(t['id'],[])
+        t['attachments']=attachments.get(t['id'],[])
+        t['archived']=t['status'] in DONE
+        t['overdue']=t['deadline']<str(today()) and t['status'] not in DONE
+    return tasks
+
+
+def period_tasks(c,start,end):
+    generate(c,start,end)
+    return enrich_tasks(c,[dict(r) for r in c.execute('SELECT * FROM tasks WHERE deadline BETWEEN ? AND ? ORDER BY deadline,id',(str(start),str(end)))])
+
+
+@app.get('/api/state')
+@auth()
+def state():
+    start,end=date_range()
     with db() as c:
-        generate(c,start,end)
-        tasks=[dict(r) for r in c.execute('SELECT * FROM tasks WHERE deadline BETWEEN ? AND ? ORDER BY deadline,id',(str(start),str(end)))]
-        attachments={}
-        for a in c.execute('SELECT a.id,a.task_id,a.name FROM attachments a JOIN tasks t ON t.id=a.task_id WHERE t.deadline BETWEEN ? AND ?',(str(start),str(end))):
-            attachments.setdefault(a['task_id'],[]).append(dict(a))
-        for t in tasks:
-            t['attachments']=attachments.get(t['id'],[])
-            t['overdue']=t['deadline']<str(today()) and t['status'] not in ('Postado','Agendado')
+        tasks=period_tasks(c,start,end)
+        formats=[{**dict(f),'channel_ids':linked_channels(c,'format',f['id'])} for f in c.execute('SELECT * FROM formats ORDER BY name')]
+        mentions=[dict(r) for r in c.execute('SELECT m.comment_id,c.task_id,c.created_at,t.title,u.name AS author FROM comment_mentions m JOIN comments c ON c.id=m.comment_id JOIN tasks t ON t.id=c.task_id JOIN users u ON u.id=c.author_id WHERE m.user_id=? AND m.read_at IS NULL ORDER BY c.id DESC',(session['uid'],))]
         return {'tasks':tasks,'users':[public_user(u) for u in c.execute('SELECT * FROM users ORDER BY name')],
             'channels':[dict(r) for r in c.execute('SELECT * FROM channels ORDER BY name')],
-            'formats':[dict(r) for r in c.execute('SELECT * FROM formats ORDER BY name')], 'today':str(today())}
+            'formats':formats,'mentions':mentions,'today':str(today())}
+
+
+@app.get('/api/tasks/<int:id>')
+@auth()
+def get_task(id):
+    with db() as c:
+        row=c.execute('SELECT * FROM tasks WHERE id=?',(id,)).fetchone()
+        if not row: abort(404)
+        return enrich_tasks(c,[dict(row)])[0]
+
+
+@app.get('/api/tasks/<int:id>/comments')
+@auth()
+def get_comments(id):
+    with db() as c:
+        if not c.execute('SELECT id FROM tasks WHERE id=?',(id,)).fetchone(): abort(404)
+        comments=[dict(r) for r in c.execute('SELECT c.*,u.name AS author FROM comments c JOIN users u ON u.id=c.author_id WHERE task_id=? ORDER BY c.id',(id,))]
+        for comment in comments:
+            comment['mentions']=[dict(r) for r in c.execute('SELECT u.id,u.name FROM comment_mentions m JOIN users u ON u.id=m.user_id WHERE m.comment_id=?',(comment['id'],))]
+        return {'comments':comments}
+
+
+@app.post('/api/tasks/<int:id>/comments')
+@auth()
+def add_comment(id):
+    d=request.get_json(); body=text(d,'body',5000)
+    values=d.get('mentions',[])
+    if not isinstance(values,list) or len(values)>50: abort(400,'Menções inválidas.')
+    with db() as c:
+        if not c.execute('SELECT id FROM tasks WHERE id=?',(id,)).fetchone(): abort(404)
+        ids=sorted({ref(c,'users',v,True) for v in values})
+        for uid in ids:
+            name=c.execute('SELECT name FROM users WHERE id=?',(uid,)).fetchone()[0]
+            if '@'+name not in body: abort(400,'Selecione a pessoa mencionada no comentário.')
+        cur=c.execute('INSERT INTO comments(task_id,author_id,body,created_at) VALUES(?,?,?,?)',(id,session['uid'],body,now()))
+        c.executemany('INSERT INTO comment_mentions(comment_id,user_id,read_at) VALUES(?,?,?)',[(cur.lastrowid,uid,now() if uid==session['uid'] else None) for uid in ids])
+    return {'ok':True},201
+
+
+@app.post('/api/tasks/<int:id>/mentions/read')
+@auth()
+def read_mentions(id):
+    with db() as c:
+        c.execute('UPDATE comment_mentions SET read_at=? WHERE user_id=? AND comment_id IN (SELECT id FROM comments WHERE task_id=?)',(now(),session['uid'],id))
+    return {'ok':True}
+
+
+def report_data():
+    from reports import summarize
+    start,end=date_range()
+    with db() as c:
+        tasks=period_tasks(c,start,end)
+        users=[public_user(u) for u in c.execute('SELECT * FROM users ORDER BY name')]
+        channels=[dict(ch) for ch in c.execute('SELECT * FROM channels ORDER BY name')]
+    return summarize(tasks,users,channels,start,end),tasks,users,channels
+
+
+@app.get('/api/insights')
+@auth()
+def insights():
+    report,tasks,users,channels=report_data()
+    return {'report':report,'tasks':tasks}
+
+
+@app.get('/api/insights.pdf')
+@auth()
+def insights_pdf():
+    from reports import make_pdf
+    report,tasks,users,channels=report_data()
+    pdf=make_pdf(report,tasks,users,channels,now())
+    return send_file(pdf,mimetype='application/pdf',as_attachment=True,
+        download_name=f"contentos-{report['start']}-{report['end']}.pdf")
+
 
 @app.post('/api/tasks')
 @auth()
@@ -248,7 +409,7 @@ def create_task():
     d=request.get_json(); count=int(d.get('quantity',1)); freq=frequency(d.get('frequency',{}))
     if not 1<=count<=100: abort(400,'Use uma quantidade entre 1 e 100.')
     with db() as c:
-        fields=task_fields(c,d); batch=secrets.token_hex(12); day=date.fromisoformat(fields['deadline']); deadlines=[]
+        ids_channels=channel_ids(c,d); fields=task_fields(c,d); batch=secrets.token_hex(12); day=date.fromisoformat(fields['deadline']); deadlines=[]
         if freq:
             while len(deadlines)<count:
                 deadlines.extend([str(day)]*min(freq.get(str(day.weekday()),0),count-len(deadlines)))
@@ -258,16 +419,15 @@ def create_task():
         for i,deadline in enumerate(deadlines):
             f={**fields,'deadline':deadline,'title':fields['title']+(f' · {i+1}' if count>1 else '')}
             cur=c.execute('INSERT INTO tasks(title,description,deadline,responsible_id,channel_id,format_id,status,frequency,batch) VALUES(:title,:description,:deadline,:responsible_id,:channel_id,:format_id,:status,:frequency,:batch)',{**f,'frequency':json.dumps(freq),'batch':batch})
+            set_channels(c,'task',cur.lastrowid,ids_channels)
+            if f['status'] in DONE: c.execute('UPDATE tasks SET completed_at=? WHERE id=?',(now(),cur.lastrowid))
             ids.append(cur.lastrowid)
     return {'ids':ids},201
 
 def task_fields(c,d):
     status=d.get('status','Pendente')
     if status not in STATES: abort(400,'Status inválido.')
-    channel=ref(c,'channels',d.get('channel_id')); fmt=ref(c,'formats',d.get('format_id'))
-    if fmt:
-        expected=c.execute('SELECT channel_id FROM formats WHERE id=?',(fmt,)).fetchone()[0]
-        if channel!=expected: abort(400,'O formato deve pertencer ao canal selecionado.')
+    ids=channel_ids(c,d); channel=ids[0] if ids else None; fmt=ref(c,'formats',d.get('format_id'))
     return dict(title=text(d,'title'),description=text(d,'description',20000,False),deadline=iso(d['deadline']),
         responsible_id=ref(c,'users',d.get('responsible_id')),channel_id=channel,format_id=fmt,status=status)
 
@@ -276,12 +436,19 @@ def task_fields(c,d):
 def update_task(id):
     d=request.get_json()
     with db() as c:
+        c.execute('BEGIN IMMEDIATE')
         old=c.execute('SELECT * FROM tasks WHERE id=?',(id,)).fetchone()
         if not old: abort(404)
         if d.get('version')!=old['version']: abort(409,'Esta tarefa foi atualizada por outra pessoa. Feche e abra novamente para carregar a versão atual.')
-        f=task_fields(c,{**dict(old),**d}); freq=frequency(d.get('frequency',json.loads(old['frequency'])))
+        merged={**dict(old),'channel_ids':linked_channels(c,'task',id),**d}
+        if 'channel_id' in d and 'channel_ids' not in d: merged.pop('channel_ids',None)
+        ids_channels=channel_ids(c,merged)
+        f=task_fields(c,merged); freq=frequency(d.get('frequency',json.loads(old['frequency'])))
         changed=c.execute('UPDATE tasks SET title=:title,description=:description,deadline=:deadline,responsible_id=:responsible_id,channel_id=:channel_id,format_id=:format_id,status=:status,frequency=:frequency,version=version+1 WHERE id=:id AND version=:version', {**f,'frequency':json.dumps(freq),'id':id,'version':old['version']}).rowcount
         if not changed: abort(409,'Esta tarefa foi atualizada por outra pessoa. Reabra a tarefa.')
+        set_channels(c,'task',id,ids_channels)
+        completed=(old['completed_at'] if old['status'] in DONE else now()) if f['status'] in DONE else None
+        c.execute('UPDATE tasks SET completed_at=? WHERE id=?',(completed,id))
     return {'ok':True}
 
 @app.post('/api/tasks/<int:id>/attachments')

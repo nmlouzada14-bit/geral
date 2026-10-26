@@ -35,7 +35,7 @@ with sync_playwright() as p:
     expect(page.get_by_role('heading',name='Instagram · demonstração')).to_be_visible()
     page.get_by_role('button',name='Criar formato').click()
     page.get_by_label('Nome do formato').fill('Reels · demonstração')
-    page.get_by_label('Canal',exact=True).select_option(label='Instagram · demonstração')
+    page.get_by_role('checkbox',name='Instagram · demonstração',exact=True).check()
     page.get_by_label('Responsável',exact=True).select_option(label='Equipe de teste')
     today=datetime.now(ZoneInfo('America/Sao_Paulo')).date()
     monday=today-timedelta(days=today.weekday())

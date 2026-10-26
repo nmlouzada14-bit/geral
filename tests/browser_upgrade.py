@@ -1,0 +1,101 @@
+"""Full browser acceptance test on a fresh isolated instance, never production."""
+import os
+from pathlib import Path
+from datetime import datetime,timedelta
+from zoneinfo import ZoneInfo
+from playwright.sync_api import sync_playwright,expect
+from pypdf import PdfReader
+URL=os.environ.get('TEST_URL','http://127.0.0.1:8004')
+OUT=Path('/tmp/contentos-upgrade-screenshots');OUT.mkdir(exist_ok=True)
+TODAY=datetime.now(ZoneInfo('America/Sao_Paulo')).date()
+START=TODAY-timedelta(days=TODAY.weekday())
+with sync_playwright() as pw:
+    browser=pw.chromium.launch(executable_path='/usr/bin/chromium',headless=True,args=['--no-sandbox'])
+    admin=browser.new_context(viewport={'width':1500,'height':1050},accept_downloads=True)
+    page=admin.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
+    def login(p,email):
+        p.goto(URL);p.get_by_label('Seu e-mail').fill(email);p.get_by_label('Senha',exact=True).fill('Initial-Test-2026!');p.get_by_role('button',name='Entrar no ContentOS').click()
+        p.get_by_label('Senha inicial').fill('Initial-Test-2026!');p.get_by_label('Nova senha pessoal').fill('Personal-Test-2026!');p.get_by_role('button',name='Salvar senha e entrar').click()
+        expect(p.get_by_role('heading',name='Sua produção, em um olhar.')).to_be_visible()
+    def nav(name,p=page):p.locator(f'.nav [data-page="{name}"]').click()
+    def req(method,path,data=None):
+        r=admin.request.fetch(URL+'/api'+path,method=method,data=data,headers={'X-ContentOS':'1'})
+        assert r.ok,r.text()
+        return r.json()
+    login(page,'nmlouzada14@gmail.com')
+    req('POST','/users',{'name':'Social Teste','email':'social@example.com','role':'Social media'})
+    nav('editorial')
+    for name,url,color in [('Instagram Teste','https://instagram.com/example','#3b82f6'),('YouTube Teste','https://youtube.com/example','#102b55')]:
+        page.get_by_role('button',name='Criar canal').click()
+        page.get_by_label('Nome do canal').fill(name);page.get_by_label('Link do canal').fill(url);page.get_by_label('Cor do canal').fill(color)
+        page.locator('#modal').get_by_role('button',name='Criar canal',exact=True).click()
+        expect(page.locator('#modal')).not_to_be_visible()
+    page.get_by_role('button',name='Criar formato').click()
+    page.get_by_label('Nome do formato').fill('Vídeo multicanal')
+    page.get_by_role('checkbox',name='Instagram Teste').check();page.get_by_role('checkbox',name='YouTube Teste').check()
+    expect(page.get_by_label('Cor do formato')).to_have_count(0)
+    page.get_by_label('Responsável',exact=True).select_option(label='Social Teste')
+    page.get_by_label('Começar em').fill(str(START))
+    for i in range(7):page.locator('#freq-'+str(i)).fill('1')
+    page.get_by_role('button',name='Criar formato e entregas').click()
+    expect(page.locator('#modal')).not_to_be_visible()
+    nav('tasks');expect(page.locator('tr[data-task]')).to_have_count(7)
+    expect(page.locator('tr[data-task]').first.locator('.channel-tag')).to_have_count(2)
+    row=page.locator('tr[data-task]').first;tid=row.get_attribute('data-task');row.click()
+    page.get_by_label('Status',exact=True).select_option('Finalizado')
+    page.get_by_role('button',name='Salvar alterações').click()
+    expect(page.locator('#modal')).not_to_be_visible()
+    archive=page.locator('#archive-box');expect(archive).not_to_have_attribute('open','')
+    expect(archive.locator('tr[data-task]')).to_have_count(1)
+    expect(page.locator('tr[data-task]:visible')).to_have_count(6)
+    archive.locator('summary').click();expect(archive.locator('tr[data-task]')).to_be_visible()
+    archive.locator('tr[data-task]').click()
+    page.get_by_label('Mencionar membro').select_option(label='Social Teste')
+    page.get_by_label('Escreva um comentário').press('End')
+    page.get_by_label('Escreva um comentário').press_sequentially('revisar <script>window.bad=true</script>')
+    page.get_by_role('button',name='Enviar comentário').click()
+    expect(page.locator('.comment')).to_have_count(1)
+    expect(page.locator('.comment mark')).to_have_text('@Social Teste')
+    assert page.evaluate('window.bad') is None
+    page.get_by_role('button',name='Fechar',exact=True).click()
+    nav('calendar');expect(page.locator('.calendar-event')).to_have_count(7)
+    for card in page.locator('.calendar-event').all():expect(card.locator('.channel-tag')).to_have_count(2)
+    page.screenshot(path=str(OUT/'calendar.png'),full_page=True)
+    nav('dashboard');expect(page.get_by_role('heading',name='Planejadas x entregues')).to_be_visible()
+    expect(page.locator('.comparison-row').nth(0)).to_contain_text('7');expect(page.locator('.comparison-row').nth(1)).to_contain_text('1')
+    page.screenshot(path=str(OUT/'dashboard.png'),full_page=True)
+    nav('insights');expect(page.get_by_role('heading',name='Insights',exact=True)).to_be_visible()
+    expect(page.locator('.insight-stats .stat-num').nth(0)).to_have_text('7');expect(page.locator('.insight-stats .stat-num').nth(1)).to_have_text('1')
+    with page.expect_download() as d:page.get_by_role('button',name='Exportar PDF').click()
+    download=d.value;download.save_as(OUT/'insights.pdf')
+    pdf=PdfReader(OUT/'insights.pdf');text=''.join(p.extract_text() for p in pdf.pages)
+    assert 'Vídeo multicanal' in text and 'Instagram Teste' in text and 'YouTube Teste' in text
+    page.screenshot(path=str(OUT/'insights.png'),full_page=True)
+    # Custom single-day filter must be honored by both cards and the generated PDF.
+    page.get_by_label('Período',exact=True).select_option('custom')
+    page.get_by_label('Data final').fill(str(START));page.get_by_label('Data final').press('Tab')
+    expect(page.locator('.insight-stats .stat-num').nth(0)).to_have_text('1')
+    with page.expect_download() as d:page.get_by_role('button',name='Exportar PDF').click()
+    assert d.value.suggested_filename==f'contentos-{START}-{START}.pdf'
+    page.set_viewport_size({'width':390,'height':844});page.screenshot(path=str(OUT/'mobile-insights.png'),full_page=True)
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    # Mention in an out-of-period task must open from another browser, without polluting weekly totals.
+    nextmonth=TODAY+timedelta(days=60)
+    out=req('POST','/tasks',{'title':'Conteúdo fora da semana','deadline':str(nextmonth)})['ids'][0]
+    users=req('GET',f'/state?start={TODAY}&end={TODAY}')['users'];uid=next(u['id'] for u in users if u['email']=='social@example.com')
+    req('POST',f'/tasks/{out}/comments',{'body':'@Social Teste conteúdo futuro','mentions':[uid]})
+    other=browser.new_context();member=other.new_page();member.on('pageerror',lambda e:errors.append(str(e)))
+    login(member,'social@example.com')
+    member.get_by_role('button',name='Menções').click()
+    expect(member.locator('.mention-notice')).to_have_count(2)
+    member.get_by_role('button',name='Social Teste').count()  # mentions identify the author; no assumptions about same-name members
+    member.locator('[data-mention-task="'+str(out)+'"]').click()
+    expect(member.get_by_label('Título',exact=True)).to_have_value('Conteúdo fora da semana')
+    expect(member.locator('.comment')).to_have_count(1)
+    member.get_by_label('Escreva um comentário').fill('Combinado, recebido.')
+    member.get_by_role('button',name='Enviar comentário').click();expect(member.locator('.comment')).to_have_count(2)
+    member.get_by_role('button',name='Fechar',exact=True).click()
+    member.reload();member.get_by_role('button',name='Menções').click();expect(member.locator('.mention-notice')).to_have_count(1)
+    assert not errors,errors
+    browser.close()
+print('PASS: multi-channel creation, inherited colors, archive, mentions across sessions, calendar tags, insights, filtered PDF and mobile.')

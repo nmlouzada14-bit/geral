@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && useradd --uid 10001 --gid contentos --no-create-home contentos \
     && mkdir -p /data \
     && chown contentos:contentos /data
-COPY --chown=contentos:contentos app.py ./
+COPY --chown=contentos:contentos app.py reports.py ./
 COPY --chown=contentos:contentos static/ ./static/
 USER contentos
 EXPOSE 8000

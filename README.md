@@ -73,20 +73,37 @@ A CLI de conexão/deploy utilizada não expõe configuração de variáveis e vo
 - Semana de segunda a domingo; deadlines sem horário, com atraso calculado pela data de São Paulo.
 - Filtro por semana atual, anterior, próxima ou intervalo personalizado de até 93 dias.
 - Status: Pendente, Em andamento, Revisão, Finalizado, Agendado, Postado e Atrasado.
-- Atraso também é um alerta derivado da deadline, sem substituir o status de produção. Agendado e Postado ficam fora do alerta. O cartão de atrasados pode se sobrepor aos demais.
+- Atraso também é um alerta derivado da deadline, sem substituir o status de produção. Finalizado, Agendado e Postado ficam fora do alerta. O cartão de atrasados pode se sobrepor aos demais.
 - Formatos repetem a frequência semanal a partir da data de início. Ao abrir um período são geradas e persistidas as entregas faltantes, sem duplicar as existentes. Não há scheduler externo necessário para visualizar o calendário.
 - Formatos e lotes são agrupados visualmente por semana na lista; cada entrega é uma tarefa independente, não uma entidade pai que soma duas vezes no dashboard.
 - Pausar um formato interrompe a geração de novas entregas. Não apaga as já existentes.
 - Tarefa manual: quantidade total de 1 a 100. Com frequência, distribui essa quantidade nos próximos dias selecionados; sem frequência, repete a mesma deadline. Editar uma entrega não altera as demais.
-- Cores dos formatos prevalecem sobre as dos canais nas tarefas e no calendário.
+- As cores são herdadas dos canais. Formatos e tarefas aceitam múltiplos canais; as tags mostram cada canal e sua cor. Cada entrega é contada uma vez no total de produção.
 - Atualizações de outros navegadores são buscadas a cada 20 segundos quando a tela está ativa, sem interromper formulários abertos. Conflitos de edição pedem recarregamento, sem sobrescrever silenciosamente.
 - Anexos autenticados, até 20 MB por envio; downloads não executam HTML no domínio do app.
 - A aba de equipe e o cadastro de usuários são restritos ao e-mail administrador também na API. Não há cadastro público.
 - A publicação nas redes sociais é feita pela equipe; marcar Agendado/Postado não envia conteúdo às plataformas.
 
+## Atualização: Insights, múltiplos canais e colaboração
+
+No EasyPanel, use **Implantar** no serviço existente para buscar a nova versão de `main`. Preserve o volume montado em `/data`, as variáveis e o domínio configurado; não é necessário criar outro serviço. A migração roda no início do aplicativo.
+
+- **Migração v2:** adiciona vínculos de múltiplos canais, comentários, menções e data de conclusão. Preserva usuários, hashes de senhas, tarefas, formatos e anexos. Antes de modificar um banco v1, cria um backup consistente em `DATA_DIR/backups/before-v2.sqlite`. Não atribui datas fictícias às conclusões antigas. A migração é transacional e não se repete quando `user_version=2`.
+- **Múltiplos canais:** um único conteúdo por tarefa, com diversos destinos. Não há status independente por canal nesta versão. Escolher um formato no formulário preenche seus canais; os destinos podem ser ajustados na tarefa. Não mescla automaticamente tarefas antigas com títulos semelhantes, para não perder conteúdo, comentários ou deadlines distintos.
+- **Editar formato:** permite selecionar mais canais sem recriar o formato. Afeta os próximos slots ainda não gerados. As tarefas já criadas são preservadas e podem ser editadas individualmente.
+- **Finalizadas/arquivadas:** seção recolhível abaixo da lista, para Finalizado, Agendado e Postado. Continua respeitando período, busca e responsável. Não apaga dados. Alterar uma tarefa para uma etapa de produção a devolve à lista ativa. O Kanban e o calendário mantêm todas as etapas.
+- **Insights:** métricas e PDF usam o intervalo de deadlines selecionado e o estado atual das tarefas. Planejadas = conteúdos únicos; entregues = Finalizado + Agendado + Postado; em aberto = planejadas menos entregues. São indicadores de produção, não de performance social. Distribuições por canal podem somar mais do que o total, porque um conteúdo pode ter vários canais.
+- **Prazos:** a data de conclusão passa a ser registrada ao entrar em uma etapa entregue. Mudanças entre Finalizado/Agendado/Postado preservam essa data. Reabrir limpa a data do ciclo atual. Conclusões antigas sem data ficam separadas da taxa de pontualidade.
+- **PDF:** gerado no servidor autenticado com resumo, gráfico planejadas x entregues, etapas, prazos, pessoas, canais, títulos de todas as entregas concluídas e demandas em aberto. Geração via `/api/insights.pdf?start=YYYY-MM-DD&end=YYYY-MM-DD`; sem serviços externos.
+- **Comentários:** salvos separadamente dos campos da tarefa. Digitar `@` ou escolher uma pessoa insere a menção. O destinatário vê um aviso em **Menções**, inclusive para tarefas fora do período atual. Abrir os comentários marca as menções dessa tarefa como lidas apenas para o usuário atual. Não envia e-mails, WhatsApp ou notificações externas.
+- **Métricas sociais:** Instagram, YouTube e TikTok ainda não estão conectados. Uma integração futura requer apps e permissões oficiais, autorização das contas e associação dos posts aos conteúdos. Não existe coleta automática de visualizações nesta versão.
+
+Validação de atualização: abra Insights e exporte um PDF; confira uma tarefa com dois canais contando uma vez; finalize/reabra uma tarefa; envie uma menção a outro integrante e confira em um segundo navegador. Mantenha uma cópia externa do volume para recuperação além do backup de migração do banco.
+
 ## Validação
 
 ```bash
+.venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m unittest discover -s tests -v
 node --check static/app.js
 ```
@@ -104,3 +121,5 @@ Teste de navegador em uma instância **isolada e vazia**, nunca em produção:
 ```
 
 O roteiro testa o primeiro acesso, cadastro da equipe, canais/formatos, geração de tarefas, drag-and-drop, upload, calendário, filtros, mobile e duas sessões independentes. Capturas são gravadas em `/tmp/contentos-screenshots`, com dados explicitamente fictícios. Não mistura esses dados com o workspace real.
+
+O roteiro `tests/browser_upgrade.py` testa Insights, PDF por intervalo, múltiplos canais, arquivamento, cores herdadas, tags no calendário, comentários e menções entre sessões. Requer uma instância isolada e vazia na porta 8004 (ou `TEST_URL`).
