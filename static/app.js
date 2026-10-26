@@ -265,7 +265,7 @@ function table(tasks, grouped = false) {
     rows += items
       .map(
         (t) =>
-          `<tr data-task="${t.id}" tabindex="0" role="button" aria-label="Abrir ${esc(t.title)}"><td><div class="task-title"><span class="dot" style="--accent:${taskColor(t)}"></span>${esc(t.title)}</div></td><td>${channelTag(t)}</td><td>${assigned(t.responsible_id)}</td><td>${fmt(t.deadline)}${t.overdue ? '<span class="late">Atrasada</span>' : ""}</td><td>${badge(t.status)}</td></tr>`,
+          `<tr data-task="${t.id}" tabindex="0" role="button" aria-label="Abrir ${esc(t.title)}"><td><div class="task-title"><span class="dot" style="--accent:${taskColor(t)}"></span>${esc(t.title)}<small class="task-origin">#${t.id} · ${t.slot?"Automática":"Avulsa"}</small></div></td><td>${channelTag(t)}</td><td>${assigned(t.responsible_id)}</td><td>${fmt(t.deadline)}${t.overdue ? '<span class="late">Atrasada</span>' : ""}</td><td>${badge(t.status)}</td></tr>`,
       )
       .join("");
   }
@@ -373,7 +373,7 @@ function editorial() {
       "",
       "PLANEJAMENTO",
     ) +
-    `<div class="notice">Cada formato gera entregas automaticamente nos dias escolhidos. As tarefas são criadas ao abrir o período, sem duplicações, e aparecem na lista e no calendário.</div><div class="section-heading"><h2>Canais <small>· ${data.channels.length}</small></h2><button data-action="new-channel">＋ Criar canal</button></div>${data.channels.length ? `<div class="editorial-grid">${data.channels.map((c) => `<article class="channel-card" style="--accent:${c.color}"><span class="badge" style="--ink:${c.color};--tint:${c.color}12">CANAL</span><h3>${esc(c.name)}</h3><a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.url)} ↗</a><p class="subtitle">${data.formats.filter((f) => (f.channel_ids || [f.channel_id]).includes(c.id)).length} formatos cadastrados</p></article>`).join("")}</div>` : `<div class="panel">${empty("Onde seu conteúdo vai aparecer?", "Cadastre os perfis e canais usados pelo time.")}</div>`}<div class="section-heading"><h2>Formatos <small>· ${data.formats.length}</small></h2><button class="primary" data-action="new-format">＋ Criar formato</button></div><section class="panel">${data.formats.length ? data.formats.map((f) => `<div class="format-row"><span class="dot" style="--accent:${taskColor(f)}"></span><div class="format-info"><h3>${esc(f.name)} ${!f.active ? '<span class="badge">Pausado</span>' : ""}</h3><p>${channelTag(f)} · ${esc(person(f.responsible_id)?.name)} · A partir de ${fmt(f.active_from)}</p><div class="frequency-summary">${freqSummary(f.frequency)}</div></div><button data-edit-format="${f.id}">Editar</button><button data-toggle-format="${f.id}">${f.active ? "Pausar" : "Retomar"}</button></div>`).join("") : empty("Qual é o ritmo da sua produção?", "Selecione os dias, as quantidades e a pessoa responsável por cada formato.")} </section><p class="subtitle">Pausar impede novas gerações. As tarefas que já foram criadas permanecem disponíveis.</p>`
+    `<div class="notice">Cada formato gera entregas automaticamente nos dias escolhidos. As tarefas são criadas ao abrir o período, sem duplicações, e aparecem na lista e no calendário.</div><div class="section-heading"><h2>Canais <small>· ${data.channels.length}</small></h2><button data-action="new-channel">＋ Criar canal</button></div>${data.channels.length ? `<div class="editorial-grid">${data.channels.map((c) => `<article class="channel-card" style="--accent:${c.color}"><span class="badge" style="--ink:${c.color};--tint:${c.color}12">CANAL</span><h3>${esc(c.name)}</h3><a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.url)} ↗</a><p class="subtitle">${data.formats.filter((f) => (f.channel_ids || [f.channel_id]).includes(c.id)).length} formatos cadastrados</p></article>`).join("")}</div>` : `<div class="panel">${empty("Onde seu conteúdo vai aparecer?", "Cadastre os perfis e canais usados pelo time.")}</div>`}<div class="section-heading"><h2>Formatos <small>· ${data.formats.length}</small></h2><button class="primary" data-action="new-format">＋ Criar formato</button></div><section class="panel">${data.formats.length ? data.formats.map((f) => `<div class="format-row"><span class="dot" style="--accent:${taskColor(f)}"></span><div class="format-info"><h3>${esc(f.name)} ${!f.active ? '<span class="badge">Pausado</span>' : ""}</h3><p>${channelTag(f)} · ${esc(person(f.responsible_id)?.name)} · A partir de ${fmt(f.active_from)}</p><div class="frequency-summary">${freqSummary(f.frequency)}</div></div><button data-edit-format="${f.id}">Editar</button><button class="danger" data-delete-format="${f.id}">Excluir</button><button data-toggle-format="${f.id}">${f.active ? "Pausar" : "Retomar"}</button></div>`).join("") : empty("Qual é o ritmo da sua produção?", "Selecione os dias, as quantidades e a pessoa responsável por cada formato.")} </section><p class="subtitle">Pausar impede novas gerações. As tarefas que já foram criadas permanecem disponíveis.</p>`
   );
 }
 function calendarRange() {
@@ -454,8 +454,11 @@ function modal(title, body, onSubmit, submit = "Salvar") {
     (b) => (b.onclick = () => el.close()),
   );
   el.showModal();
+  let submitting=false;
   el.querySelector("form").onsubmit = async (e) => {
     e.preventDefault();
+    if(submitting)return;
+    submitting=true;
     const button = e.target.querySelector("[type=submit]");
     button.disabled = true;
     try {
@@ -465,6 +468,7 @@ function modal(title, body, onSubmit, submit = "Salvar") {
     } catch (err) {
       e.target.querySelector(".error").textContent = err.message;
     } finally {
+      submitting=false;
       button.disabled = false;
     }
   };
@@ -488,7 +492,7 @@ async function openTask(id) {
     }
   }
   const editing = !!t;
-  const channels = data.channels;
+  const requestId=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
   let taskIds = null,
     saved = false;
   const freq = t ? JSON.parse(t.frequency) : {};
@@ -505,7 +509,7 @@ async function openTask(id) {
       states.map((s) => ({ id: s, name: s })),
       t?.status || "Pendente",
       true,
-    )}${editing ? `<div class="field"><label>Identificação</label><div class="notice" style="margin:0">Tarefa #${t.id}${t.slot ? " · Linha editorial" : ""}</div></div>` : field("Quantidade total de tarefas", "quantity", "number", 1, 'min="1" max="100" required')}${frequencyInputs(freq)}<div class="full"><p class="subtitle">${editing ? "Esta edição altera somente esta entrega. A frequência original fica registrada para consulta." : "Com frequência, a quantidade total é distribuída nos próximos dias selecionados, a partir da deadline. Sem frequência, todas recebem a mesma deadline."}</p></div><div class="full field" style="margin-top:20px"><label for="file">Anexos · até 20 MB por arquivo</label><input id="file" type="file" multiple>${editing ? `<div class="attachments">${t.attachments.map((a) => `<a href="/api/attachments/${a.id}" target="_blank" rel="noopener">↗ ${esc(a.name)}</a>`).join("")}</div>` : ""}<small>${editing ? "Arquivos disponíveis para todo o time." : "Anexos serão adicionados a cada tarefa criada."}</small></div></div>`,
+    )}${editing ? `<div class="field"><label>Identificação</label><div class="notice" style="margin:0">Tarefa #${t.id}${t.slot ? " · Linha editorial" : ""}</div></div>` : field("Quantidade total de tarefas", "quantity", "number", 1, 'min="1" max="100" required')}${frequencyInputs(freq)}${!editing?'<div class="full notice" id="creation-summary" aria-live="polite"></div>':""}<div class="full"><p class="subtitle">${editing ? "Esta edição altera somente esta entrega. A frequência original fica registrada para consulta." : "Com frequência, a quantidade total é distribuída nos próximos dias selecionados, a partir da deadline. Sem frequência, todas recebem a mesma deadline."}</p></div><div class="full field" style="margin-top:20px"><label for="file">Anexos · até 20 MB por arquivo</label><input id="file" type="file" multiple>${editing ? `<div class="attachments">${t.attachments.map((a) => `<a href="/api/attachments/${a.id}" target="_blank" rel="noopener">↗ ${esc(a.name)}</a>`).join("")}</div>` : ""}<small>${editing ? "Arquivos disponíveis para todo o time." : "Anexos serão adicionados a cada tarefa criada."}</small></div></div>`,
     async (d) => {
       d.frequency = getFreq(d);
       d.channel_ids = selectedChannels();
@@ -515,7 +519,7 @@ async function openTask(id) {
           taskIds = [id];
         } else
           taskIds = (
-            await api("/tasks", "POST", { ...d, quantity: Number(d.quantity) })
+            await api("/tasks", "POST", { ...d, quantity: Number(d.quantity), request_id:requestId })
           ).ids;
         saved = true;
       }
@@ -548,13 +552,21 @@ async function openTask(id) {
     editing ? "Salvar alterações" : "Criar tarefa(s)",
   );
   openTask.uploaded = new Set();
+  const updateSummary=()=>{
+    if(editing)return;
+    const count=Number($('#f-quantity').value)||1,n=selectedChannels().length,f=format($('#f-format_id').value);
+    $('#creation-summary').textContent=`Serão criadas ${count} tarefa(s), cada uma com ${n} canal(is). Canais não multiplicam a quantidade.`+(f?' Este formato já gera entregas automaticamente. Criar aqui adiciona tarefas extras; para aproveitar uma entrega existente, abra-a na lista ou no calendário.':'');
+  };
+  if(!editing)$('#modal-form').addEventListener('input',updateSummary);
   $("#f-format_id").onchange = (e) => {
     const f = format(e.target.value);
     if (f)
       $$('#modal [name="channels"]').forEach((input) => {
         input.checked = f.channel_ids.includes(Number(input.value));
       });
+    updateSummary();
   };
+  updateSummary();
   if (editing) attachComments(id);
 }
 
@@ -643,6 +655,8 @@ function navigate(p) {
   refresh();
 }
 function bind() {
+  $$('[data-delete-format]').forEach(b=>b.onclick=()=>deleteFormat(Number(b.dataset.deleteFormat)));
+
   if ($("#archive-box"))
     $("#archive-box").ontoggle = (e) => {
       archiveOpen = e.target.open;
@@ -1037,4 +1051,12 @@ function openMentions() {
         openTask(Number(b.dataset.mentionTask));
       }),
   );
+}
+
+function deleteFormat(id){
+  const f=format(id);if(!f)return;
+  modal('Excluir formato',`<p>Excluir <strong>${esc(f.name)}</strong> da linha editorial?</p><div class="notice">Esse formato deixará de gerar novas entregas. Todas as tarefas já criadas serão mantidas, com seus canais, comentários e anexos.</div>`,async()=>{
+    const result=await api('/formats/'+id,'DELETE');toast(`Formato excluído. ${result.preserved_tasks} tarefa(s) preservada(s).`);
+  },'Excluir formato');
+  $('#modal-form [type="submit"]').classList.add('danger');
 }

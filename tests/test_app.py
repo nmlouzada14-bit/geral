@@ -10,7 +10,7 @@ class Workflow(unittest.TestCase):
     def setUp(self):
         self.client=m.app.test_client()
         with m.db() as c:
-            for table in ['attachments','tasks','formats','channels','login_attempts']:
+            for table in ['task_requests','attachments','tasks','formats','channels','login_attempts']:
                 c.execute('DELETE FROM '+table)
             c.execute('DELETE FROM users WHERE email!=?',(m.ADMIN,))
             c.execute('UPDATE users SET password=?,must_change=1',(m.generate_password_hash('Initial-Test-2026!'),))
@@ -198,5 +198,50 @@ class Workflow(unittest.TestCase):
         self.assertEqual(len(new),1);self.assertEqual(new[0]['channel_ids'],[ch,second])
         self.call('patch',f"/tasks/{t['id']}",{'version':1,'channel_ids':[ch,second]})
         self.assertEqual(len(self.state()['tasks']),1)
+
+    def test_manual_multichannel_and_retry_are_not_duplicates(self):
+        ch=self.channel()
+        self.call('post','/channels',{'name':'TikTok','url':'https://tiktok.com/@example','color':'#102b55'},201)
+        second=self.state()['channels'][1]['id']
+        payload={'title':'Um vídeo, dois canais','deadline':str(m.today()),'quantity':1,'channel_ids':[ch,second],'request_id':'test_request_123456789'}
+        first=self.call('post','/tasks',payload,201)
+        repeated=self.call('post','/tasks',payload,200)
+        self.assertEqual(first['ids'],repeated['ids'])
+        self.assertEqual(len(self.state()['tasks']),1)
+        self.assertEqual(self.state()['tasks'][0]['channel_ids'],[ch,second])
+        self.call('post','/tasks',{**payload,'quantity':2},409)
+        self.call('post','/tasks',{**payload,'quantity':2,'request_id':'another_request_123456789'},201)
+        self.assertEqual(len(self.state()['tasks']),3)
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        barrier=threading.Barrier(2)
+        def simultaneous(_):
+            client=m.app.test_client()
+            with client.session_transaction() as sess: sess['uid']=1
+            barrier.wait(timeout=5)
+            result=client.post('/api/tasks',json={**payload,'request_id':'concurrent_request_123456789'},headers={'X-ContentOS':'1'})
+            return result.status_code,result.get_json()
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results=list(executor.map(simultaneous,range(2)))
+        self.assertEqual(sorted(r[0] for r in results),[200,201])
+        self.assertEqual(results[0][1]['ids'],results[1][1]['ids'])
+        self.assertEqual(len(self.state()['tasks']),4)
+
+    def test_delete_format_preserves_tasks_and_does_not_block_reused_id(self):
+        ch=self.channel();body={'name':'Excluir este','channel_ids':[ch],'responsible_id':1,'frequency':{str(m.today().weekday()):1},'active_from':str(m.today())}
+        self.call('post','/formats',body,201)
+        state=self.state();f=state['formats'][0];t=state['tasks'][0]
+        self.call('post',f"/tasks/{t['id']}/comments",{'body':'Manter comentário'},201)
+        self.call('delete',f"/formats/{f['id']}",expected=401,client=m.app.test_client())
+        self.call('delete',f"/formats/{f['id']}")
+        state=self.state();self.assertEqual(state['formats'],[]);self.assertEqual(len(state['tasks']),1)
+        self.assertIsNone(state['tasks'][0]['format_id']);self.assertIsNone(state['tasks'][0]['slot'])
+        self.assertEqual(state['tasks'][0]['channel_ids'],[ch])
+        self.assertEqual(len(self.call('get',f"/tasks/{t['id']}/comments")['comments']),1)
+        self.call('patch',f"/tasks/{t['id']}",{'version':1,'status':'Postado'},409)
+        nextweek=m.today()+timedelta(days=7)
+        self.assertEqual(self.call('get',f'/state?start={nextweek}&end={nextweek}')['tasks'],[])
+        self.call('post','/formats',body,201)
+        self.assertEqual(len(self.state()['tasks']),2)
 
 if __name__=='__main__':unittest.main()

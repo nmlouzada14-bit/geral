@@ -57,6 +57,7 @@ def init():
         CREATE TABLE IF NOT EXISTS formats(id INTEGER PRIMARY KEY, name TEXT NOT NULL, channel_id INTEGER NOT NULL REFERENCES channels(id), responsible_id INTEGER REFERENCES users(id), color TEXT NOT NULL, frequency TEXT NOT NULL, active_from TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', deadline TEXT NOT NULL, responsible_id INTEGER REFERENCES users(id), channel_id INTEGER REFERENCES channels(id), format_id INTEGER REFERENCES formats(id), status TEXT NOT NULL, frequency TEXT NOT NULL DEFAULT '{}', batch TEXT, slot TEXT UNIQUE, version INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS attachments(id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), name TEXT NOT NULL, disk TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS task_requests(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, request_id TEXT NOT NULL, payload_hash TEXT NOT NULL, task_ids TEXT NOT NULL, PRIMARY KEY(user_id,request_id));
         CREATE TABLE IF NOT EXISTS login_attempts(key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset_at REAL NOT NULL);
         ''')
         c.execute('BEGIN IMMEDIATE')
@@ -276,6 +277,18 @@ def update_format(id):
     return {'ok':True}
 
 
+@app.delete('/api/formats/<int:id>')
+@auth()
+def delete_format(id):
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if not c.execute('SELECT id FROM formats WHERE id=?',(id,)).fetchone(): abort(404,'Formato não encontrado.')
+        # Slots contain format IDs. Clear them so a future reused ID cannot collide.
+        changed=c.execute('UPDATE tasks SET format_id=NULL,slot=NULL,version=version+1 WHERE format_id=?',(id,)).rowcount
+        c.execute('DELETE FROM formats WHERE id=?',(id,))
+    return {'ok':True,'preserved_tasks':changed}
+
+
 def generate(c,start,end):
     for f in c.execute('SELECT * FROM formats WHERE active=1').fetchall():
         freq=json.loads(f['frequency']); day=max(start,date.fromisoformat(f['active_from']))
@@ -314,6 +327,7 @@ def enrich_tasks(c, tasks):
 
 
 def period_tasks(c,start,end):
+    if not c.in_transaction: c.execute('BEGIN IMMEDIATE')
     generate(c,start,end)
     return enrich_tasks(c,[dict(r) for r in c.execute('SELECT * FROM tasks WHERE deadline BETWEEN ? AND ? ORDER BY deadline,id',(str(start),str(end)))])
 
@@ -408,7 +422,17 @@ def insights_pdf():
 def create_task():
     d=request.get_json(); count=int(d.get('quantity',1)); freq=frequency(d.get('frequency',{}))
     if not 1<=count<=100: abort(400,'Use uma quantidade entre 1 e 100.')
+    request_id=d.get('request_id')
+    if request_id is not None and (not isinstance(request_id,str) or not re.fullmatch(r'[a-zA-Z0-9_-]{16,100}',request_id)):
+        abort(400,'Identificador da solicitação inválido.')
+    payload_hash=hashlib.sha256(json.dumps({k:v for k,v in d.items() if k!='request_id'},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if request_id:
+            previous=c.execute('SELECT * FROM task_requests WHERE user_id=? AND request_id=?',(session['uid'],request_id)).fetchone()
+            if previous:
+                if previous['payload_hash']!=payload_hash: abort(409,'Esta solicitação já foi salva. Feche o formulário e confira as tarefas antes de criar outra.')
+                return {'ids':json.loads(previous['task_ids']),'replayed':True},200
         ids_channels=channel_ids(c,d); fields=task_fields(c,d); batch=secrets.token_hex(12); day=date.fromisoformat(fields['deadline']); deadlines=[]
         if freq:
             while len(deadlines)<count:
@@ -422,6 +446,8 @@ def create_task():
             set_channels(c,'task',cur.lastrowid,ids_channels)
             if f['status'] in DONE: c.execute('UPDATE tasks SET completed_at=? WHERE id=?',(now(),cur.lastrowid))
             ids.append(cur.lastrowid)
+        if request_id:
+            c.execute('INSERT INTO task_requests VALUES(?,?,?,?)',(session['uid'],request_id,payload_hash,json.dumps(ids)))
     return {'ids':ids},201
 
 def task_fields(c,d):

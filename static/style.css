@@ -1569,3 +1569,5 @@ dialog::backdrop {
 
 .insight-stats .stat:last-child{background:white;border-color:var(--line)}
 .insight-stats .stat:last-child .stat-num{color:var(--blue)}
+
+button.danger{color:#b83d4b;border-color:#efced2;background:#fff6f7}button.danger:hover{background:#ffe9ec}.task-origin{display:block;white-space:nowrap;font-size:9px;margin-left:auto}
