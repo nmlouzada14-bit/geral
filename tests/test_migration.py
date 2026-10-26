@@ -18,7 +18,7 @@ class Migration(unittest.TestCase):
 import app
 app.init()
 with app.db() as c:
- assert c.execute('PRAGMA user_version').fetchone()[0]==2
+ assert c.execute('PRAGMA user_version').fetchone()[0]==3
  assert c.execute('SELECT password FROM users').fetchone()[0]=='preserve-this-hash'
  assert c.execute('SELECT title FROM tasks').fetchone()[0]=='Não perder'
  assert c.execute('SELECT completed_at FROM tasks').fetchone()[0] is None
@@ -35,3 +35,28 @@ with app.db() as c:
             before=backup.read_bytes()
             subprocess.run([sys.executable,'-c',run],cwd=root,env=env,check=True,capture_output=True)
             self.assertEqual(before,backup.read_bytes())
+
+    def test_v2_responsible_backfill_and_restart(self):
+        root=Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as folder:
+            env={**os.environ,'DATA_DIR':folder,'INITIAL_PASSWORD':'Migration-Test-2026!','PYTHONPATH':str(root)}
+            run="""
+import app
+with app.db() as c:
+ c.execute("INSERT INTO tasks(title,deadline,status,responsible_id) VALUES('Legada','2026-10-26','Pendente',1)")
+ c.execute('DROP TABLE task_responsibles')
+ c.execute('DROP TABLE format_responsibles')
+ c.execute('PRAGMA user_version=2')
+app.init()
+with app.db() as c:
+ assert list(c.execute('SELECT user_id FROM task_responsibles'))[0][0]==1
+ c.execute('DELETE FROM task_responsibles')
+ c.execute('UPDATE tasks SET responsible_id=NULL')
+app.init()
+with app.db() as c:
+ assert c.execute('SELECT count(*) FROM task_responsibles').fetchone()[0]==0
+"""
+            subprocess.run([sys.executable,'-c',run],cwd=root,env=env,check=True,capture_output=True)
+            with sqlite3.connect(Path(folder)/'backups/before-v3.sqlite') as c:
+                self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],2)
+                self.assertEqual(c.execute('SELECT responsible_id FROM tasks').fetchone()[0],1)

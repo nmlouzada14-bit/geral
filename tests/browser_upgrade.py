@@ -34,7 +34,7 @@ with sync_playwright() as pw:
     page.get_by_label('Nome do formato').fill('Vídeo multicanal')
     page.get_by_role('checkbox',name='Instagram Teste').check();page.get_by_role('checkbox',name='YouTube Teste').check()
     expect(page.get_by_label('Cor do formato')).to_have_count(0)
-    page.get_by_label('Responsável',exact=True).select_option(label='Social Teste')
+    page.get_by_role('checkbox',name='Social Teste',exact=True).check()
     page.get_by_label('Começar em').fill(str(START))
     for i in range(7):page.locator('#freq-'+str(i)).fill('1')
     page.get_by_role('button',name='Criar formato e entregas').click()

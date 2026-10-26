@@ -36,7 +36,7 @@ with sync_playwright() as p:
     page.get_by_role('button',name='Criar formato').click()
     page.get_by_label('Nome do formato').fill('Reels · demonstração')
     page.get_by_role('checkbox',name='Instagram · demonstração',exact=True).check()
-    page.get_by_label('Responsável',exact=True).select_option(label='Equipe de teste')
+    page.get_by_role('checkbox',name='Equipe de teste',exact=True).check()
     today=datetime.now(ZoneInfo('America/Sao_Paulo')).date()
     monday=today-timedelta(days=today.weekday())
     page.get_by_label('Começar em').fill(str(monday))

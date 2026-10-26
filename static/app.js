@@ -153,6 +153,8 @@ const channelTag = (t) =>
           .join("")
       : '<span class="muted">Sem canal</span>'
   }</span>`;
+const taskPeople = t => t?.responsible_ids || (t?.responsible_id ? [t.responsible_id] : []);
+const assignedPeople = t => taskPeople(t).map(assigned).join(" ") || "<small>Sem responsável</small>";
 const assigned = (id) => {
   const u = person(id);
   return u
@@ -242,7 +244,7 @@ function filtered() {
         (filterStatus === "Atrasado"
           ? t.overdue || t.status === "Atrasado"
           : t.status === filterStatus)) &&
-      (!filterPerson || String(t.responsible_id) === filterPerson),
+      (!filterPerson || taskPeople(t).includes(Number(filterPerson))),
   );
 }
 function table(tasks, grouped = false) {
@@ -268,7 +270,7 @@ function table(tasks, grouped = false) {
     rows += items
       .map(
         (t) =>
-          `<tr data-task="${t.id}" tabindex="0" role="button" aria-label="Abrir ${esc(t.title)}">${selectable ? `<td><input type="checkbox" data-select-task="${t.id}" aria-label="Selecionar ${esc(t.title)}" ${selectedTasks.has(t.id) ? "checked" : ""}></td>` : ""}<td><div class="task-title"><span class="dot" style="--accent:${taskColor(t)}"></span>${esc(t.title)}<small class="task-origin">#${t.id} · ${t.slot?"Automática":"Avulsa"}</small></div></td><td>${channelTag(t)}</td><td>${assigned(t.responsible_id)}</td><td>${fmt(t.deadline)}${t.overdue ? '<span class="late">Atrasada</span>' : ""}</td><td>${badge(t.status)}</td></tr>`,
+          `<tr data-task="${t.id}" tabindex="0" role="button" aria-label="Abrir ${esc(t.title)}">${selectable ? `<td><input type="checkbox" data-select-task="${t.id}" aria-label="Selecionar ${esc(t.title)}" ${selectedTasks.has(t.id) ? "checked" : ""}></td>` : ""}<td><div class="task-title"><span class="dot" style="--accent:${taskColor(t)}"></span>${esc(t.title)}<small class="task-origin">#${t.id} · ${t.slot?"Automática":"Avulsa"}</small></div></td><td>${channelTag(t)}</td><td>${assignedPeople(t)}</td><td>${fmt(t.deadline)}${t.overdue ? '<span class="late">Atrasada</span>' : ""}</td><td>${badge(t.status)}</td></tr>`,
       )
       .join("");
   }
@@ -301,11 +303,11 @@ function dashboard() {
   const people = [
     ...data.users.map((u) => ({
       u,
-      n: data.tasks.filter((t) => t.responsible_id === u.id).length,
+      n: data.tasks.filter((t) => taskPeople(t).includes(u.id)).length,
     })),
     {
       u: { name: "Sem responsável" },
-      n: data.tasks.filter((t) => !t.responsible_id).length,
+      n: data.tasks.filter((t) => !taskPeople(t).length).length,
     },
   ]
     .filter((x) => x.n)
@@ -355,7 +357,7 @@ function tasksPage() {
         : `<div class="kanban">${states
             .map((s, i) => {
               const items = tasks.filter((t) => t.status === s);
-              return `<section class="column" data-drop="${s}"><div class="column-title"><span class="dot" style="--accent:${colors[i]}"></span>${s}<span class="count">${items.length}</span></div>${items.map((t) => `<article class="task-card" draggable="true" data-task="${t.id}" tabindex="0" role="button" aria-label="Abrir ${esc(t.title)}">${channelTag(t)}<h3>${esc(t.title)}</h3><div class="card-foot"><span>${fmt(t.deadline)}${t.overdue ? '<span class="late">Atrasada</span>' : ""}</span>${avatar(person(t.responsible_id))}</div></article>`).join("")}${!items.length ? '<div class="empty">Arraste uma tarefa para cá</div>' : ""}</section>`;
+              return `<section class="column" data-drop="${s}"><div class="column-title"><span class="dot" style="--accent:${colors[i]}"></span>${s}<span class="count">${items.length}</span></div>${items.map((t) => `<article class="task-card" draggable="true" data-task="${t.id}" tabindex="0" role="button" aria-label="Abrir ${esc(t.title)}">${channelTag(t)}<h3>${esc(t.title)}</h3><div class="card-foot"><span>${fmt(t.deadline)}${t.overdue ? '<span class="late">Atrasada</span>' : ""}</span>${assignedPeople(t)}</div></article>`).join("")}${!items.length ? '<div class="empty">Arraste uma tarefa para cá</div>' : ""}</section>`;
             })
             .join(
               "",
@@ -377,7 +379,7 @@ function editorial() {
       "",
       "PLANEJAMENTO",
     ) +
-    `<div class="notice">Cada formato gera entregas automaticamente nos dias escolhidos. As tarefas são criadas ao abrir o período, sem duplicações, e aparecem na lista e no calendário.</div><div class="section-heading"><h2>Canais <small>· ${activeChannels().length}</small></h2><button data-action="new-channel">＋ Criar canal</button></div>${activeChannels().length ? `<div class="editorial-grid">${activeChannels().map((c) => `<article class="channel-card" style="--accent:${c.color}"><span class="badge" style="--ink:${c.color};--tint:${c.color}12">CANAL</span><h3>${esc(c.name)}</h3><a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.url)} ↗</a><p class="subtitle">${data.formats.filter((f) => (f.channel_ids || [f.channel_id]).includes(c.id)).length} formatos cadastrados</p><div class="channel-actions"><button data-edit-channel="${c.id}">Editar</button><button class="danger" data-delete-channel="${c.id}">Excluir</button></div></article>`).join("")}</div>` : `<div class="panel">${empty("Onde seu conteúdo vai aparecer?", "Cadastre os perfis e canais usados pelo time.")}</div>`}<div class="section-heading"><h2>Formatos <small>· ${data.formats.length}</small></h2><button class="primary" data-action="new-format">＋ Criar formato</button></div><section class="panel">${data.formats.length ? data.formats.map((f) => `<div class="format-row"><span class="dot" style="--accent:${taskColor(f)}"></span><div class="format-info"><h3>${esc(f.name)} ${!f.active ? '<span class="badge">Pausado</span>' : ""}</h3><p>${channelTag(f)} · ${esc(person(f.responsible_id)?.name)} · A partir de ${fmt(f.active_from)}</p><div class="frequency-summary">${freqSummary(f.frequency)}</div></div><button data-edit-format="${f.id}">Editar</button><button class="danger" data-delete-format="${f.id}">Excluir</button><button data-toggle-format="${f.id}">${f.active ? "Pausar" : "Retomar"}</button></div>`).join("") : empty("Qual é o ritmo da sua produção?", "Selecione os dias, as quantidades e a pessoa responsável por cada formato.")} </section><p class="subtitle">Pausar impede novas gerações. As tarefas que já foram criadas permanecem disponíveis.</p>`
+    `<div class="notice">Cada formato gera entregas automaticamente nos dias escolhidos. As tarefas são criadas ao abrir o período, sem duplicações, e aparecem na lista e no calendário.</div><div class="section-heading"><h2>Canais <small>· ${activeChannels().length}</small></h2><button data-action="new-channel">＋ Criar canal</button></div>${activeChannels().length ? `<div class="editorial-grid">${activeChannels().map((c) => `<article class="channel-card" style="--accent:${c.color}"><span class="badge" style="--ink:${c.color};--tint:${c.color}12">CANAL</span><h3>${esc(c.name)}</h3><a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.url)} ↗</a><p class="subtitle">${data.formats.filter((f) => (f.channel_ids || [f.channel_id]).includes(c.id)).length} formatos cadastrados</p><div class="channel-actions"><button data-edit-channel="${c.id}">Editar</button><button class="danger" data-delete-channel="${c.id}">Excluir</button></div></article>`).join("")}</div>` : `<div class="panel">${empty("Onde seu conteúdo vai aparecer?", "Cadastre os perfis e canais usados pelo time.")}</div>`}<div class="section-heading"><h2>Formatos <small>· ${data.formats.length}</small></h2><button class="primary" data-action="new-format">＋ Criar formato</button></div><section class="panel">${data.formats.length ? data.formats.map((f) => `<div class="format-row"><span class="dot" style="--accent:${taskColor(f)}"></span><div class="format-info"><h3>${esc(f.name)} ${!f.active ? '<span class="badge">Pausado</span>' : ""}</h3><p>${channelTag(f)} · ${taskPeople(f).map(id=>esc(person(id)?.name)).join(", ")} · A partir de ${fmt(f.active_from)}</p><div class="frequency-summary">${freqSummary(f.frequency)}</div></div><button data-edit-format="${f.id}">Editar</button><button class="danger" data-delete-format="${f.id}">Excluir</button><button data-toggle-format="${f.id}">${f.active ? "Pausar" : "Retomar"}</button></div>`).join("") : empty("Qual é o ritmo da sua produção?", "Selecione os dias, as quantidades e a pessoa responsável por cada formato.")} </section><p class="subtitle">Pausar impede novas gerações. As tarefas que já foram criadas permanecem disponíveis.</p>`
   );
 }
 function calendarRange() {
@@ -502,7 +504,7 @@ async function openTask(id) {
   const freq = t ? JSON.parse(t.frequency) : {};
   modal(
     editing ? "Detalhes da tarefa" : "Criar tarefa",
-    `<div class="form-grid"><div class="full">${field("Título", "title", "text", t?.title || "", 'required maxlength="200" placeholder="O que vamos produzir?"')}</div><div class="full field"><label for="f-description">Descrição e links</label><textarea id="f-description" name="description" maxlength="20000" placeholder="Briefing, referências e links para a produção…">${esc(t?.description || "")}</textarea>${t ? `<div class="link-preview">${(t.description.match(/https?:\/\/[^\s<>"']+/g) || []).map((url, i) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">Referência ${i + 1} ↗</a>`).join("")}</div>` : ""}</div>${field("Deadline", "deadline", "date", t?.deadline || data.today, "required")}${selectField("Responsável", "responsible_id", data.users, t?.responsible_id)}${channelsPicker(t?.channel_ids || [])}${selectField(
+    `<div class="form-grid"><div class="full">${field("Título", "title", "text", t?.title || "", 'required maxlength="200" placeholder="O que vamos produzir?"')}</div><div class="full field"><label for="f-description">Descrição e links</label><textarea id="f-description" name="description" maxlength="20000" placeholder="Briefing, referências e links para a produção…">${esc(t?.description || "")}</textarea>${t ? `<div class="link-preview">${(t.description.match(/https?:\/\/[^\s<>"']+/g) || []).map((url, i) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">Referência ${i + 1} ↗</a>`).join("")}</div>` : ""}</div>${field("Deadline", "deadline", "date", t?.deadline || data.today, "required")}${responsiblesPicker(taskPeople(t))}${channelsPicker(t?.channel_ids || [])}${selectField(
       "Formato",
       "format_id",
       data.formats,
@@ -517,6 +519,7 @@ async function openTask(id) {
     async (d) => {
       d.frequency = getFreq(d);
       d.channel_ids = selectedChannels();
+      d.responsible_ids = selectedResponsibles();
       if (!saved) {
         if (editing) {
           await api("/tasks/" + id, "PATCH", { ...d, version: t.version });
@@ -568,6 +571,7 @@ async function openTask(id) {
       $$('#modal [name="channels"]').forEach((input) => {
         input.checked = f.channel_ids.includes(Number(input.value));
       });
+    if(f) $$('#modal [name="responsibles"]').forEach(input=>{ input.checked=taskPeople(f).includes(Number(input.value)); });
     updateSummary();
   };
   updateSummary();
@@ -596,16 +600,18 @@ function openFormat(id) {
   const f = format(id);
   modal(
     f ? "Editar formato" : "Criar formato",
-    `<div class="form-grid"><div class="full">${field("Nome do formato", "name", "text", f?.name || "", 'required maxlength="200"')}</div>${channelsPicker(f?.channel_ids || [])}${selectField("Responsável", "responsible_id", data.users, f?.responsible_id || "", true)}${field("Começar em", "active_from", "date", f?.active_from || data.today, "required")}${frequencyInputs(f ? JSON.parse(f.frequency) : {})}<div class="full notice">As cores vêm dos canais. Um conteúdo com vários canais gera uma única tarefa por entrega. ${f ? "Alterações valem para novas entregas; as existentes são preservadas e podem ser editadas individualmente." : "A frequência se repete semanalmente."}</div></div>`,
+    `<div class="form-grid"><div class="full">${field("Nome do formato", "name", "text", f?.name || "", 'required maxlength="200"')}</div>${channelsPicker(f?.channel_ids || [])}${responsiblesPicker(taskPeople(f))}${field("Começar em", "active_from", "date", f?.active_from || data.today, "required")}${frequencyInputs(f ? JSON.parse(f.frequency) : {})}<div class="full notice">As cores vêm dos canais. Um conteúdo com vários canais gera uma única tarefa por entrega. ${f ? "Responsáveis, canais e frequência alterados serão atualizados nas tarefas vinculadas, inclusive finalizadas. O nome atualiza títulos automáticos. Prazos, títulos personalizados e status são mantidos; mudanças na agenda valem para próximas entregas." : "A frequência se repete semanalmente."}</div></div>`,
     async (d) => {
       d.frequency = getFreq(d);
       d.channel_ids = selectedChannels();
+      d.responsible_ids = selectedResponsibles();
       if (!d.channel_ids.length)
         throw new Error("Selecione pelo menos um canal.");
+      if (!d.responsible_ids.length) throw new Error("Selecione pelo menos um responsável.");
       await api("/formats" + (f ? "/" + id : ""), f ? "PATCH" : "POST", d);
       toast(
         f
-          ? "Formato atualizado. As entregas existentes foram preservadas."
+          ? "Formato e tarefas vinculadas atualizados."
           : "Formato criado, sem duplicar conteúdo por canal.",
       );
     },
@@ -883,7 +889,7 @@ function insightsPage() {
     ["Conclusão", r.rate + "%"],
   ];
   const breakdown = (rows, first) =>
-    `<div class="table-wrap"><table><thead><tr><th>${first}</th><th>Planejadas</th><th>Entregues</th><th>Em aberto</th><th>Atrasadas</th></tr></thead><tbody>${rows.length ? rows.map((x) => `<tr><td>${esc(x.name)}</td><td>${x.planned}</td><td>${x.delivered}</td><td>${x.pending}</td><td>${x.overdue}</td></tr>`).join("") : '<tr><td colspan="${selectable ? 6 : 5}">Sem demandas neste período.</td></tr>'}</tbody></table></div>`;
+    `<div class="table-wrap"><table><thead><tr><th>${first}</th><th>Planejadas</th><th>Entregues</th><th>Em aberto</th><th>Atrasadas</th></tr></thead><tbody>${rows.length ? rows.map((x) => `<tr><td>${esc(x.name)}</td><td>${x.planned}</td><td>${x.delivered}</td><td>${x.pending}</td><td>${x.overdue}</td></tr>`).join("") : '<tr><td colspan="5">Sem demandas neste período.</td></tr>'}</tbody></table></div>`;
   return (
     heading(
       "Insights",
@@ -892,7 +898,7 @@ function insightsPage() {
       "RELATÓRIO DE PRODUÇÃO",
     ) +
     periodControl() +
-    `<div class="notice">Período filtrado pela deadline. Cada conteúdo conta uma vez, mesmo com vários canais. Entregues = Finalizados + Agendados + Postados. Os números refletem o status atual das tarefas.</div><div class="insight-stats">${metrics.map(([label, n]) => `<div class="stat"><div class="stat-top">${label}</div><div class="stat-num">${n}</div></div>`).join("")}</div><div class="grid-two">${deliveryPanel()}<section class="panel"><div class="panel-head"><h2>Prazos das entregas</h2></div><div class="panel-body"><div class="deadline-metrics"><p><strong>${r.on_time}</strong> no prazo</p><p><strong>${r.late_delivery}</strong> após o prazo</p><p><strong>${r.undated_delivery}</strong> sem data histórica</p></div><p class="subtitle">${r.on_time_rate === null ? "Sem datas de conclusão suficientes." : r.on_time_rate + "% das entregas com data registrada foram concluídas no prazo."} Entregas anteriores à atualização não recebem datas estimadas.</p></div></section></div><div class="grid-two"><section class="panel"><div class="panel-head"><h2>Por pessoa</h2></div>${breakdown(r.people, "Pessoa")}</section><section class="panel"><div class="panel-head"><div><h2>Por canal</h2><p>Um conteúdo pode aparecer em mais de um canal.</p></div></div>${breakdown(r.channels, "Canal")}</section></div><section class="panel report-section"><div class="panel-head"><h2>Entregas concluídas · ${r.delivered}</h2></div>${data.tasks.some(isDelivered) ? table(data.tasks.filter(isDelivered)) : empty("Nenhuma entrega concluída neste período.", "")}</section><section class="panel report-section"><div class="panel-head"><h2>Demandas em aberto · ${r.pending}</h2></div>${data.tasks.some((t) => !isDelivered(t)) ? table(data.tasks.filter((t) => !isDelivered(t))) : empty("Nenhuma demanda em aberto neste período.", "")}</section><div class="notice"><strong>Métricas das redes sociais</strong><br>Instagram, YouTube e TikTok ainda não estão conectados às APIs oficiais. Visualizações, alcance e engajamento não fazem parte deste relatório de produção.</div>`
+    `<div class="notice">Período filtrado pela deadline. Cada conteúdo conta uma vez, mesmo com vários canais. Entregues = Finalizados + Agendados + Postados. Os números refletem o status atual das tarefas.</div><div class="insight-stats">${metrics.map(([label, n]) => `<div class="stat"><div class="stat-top">${label}</div><div class="stat-num">${n}</div></div>`).join("")}</div><div class="grid-two">${deliveryPanel()}<section class="panel"><div class="panel-head"><h2>Prazos das entregas</h2></div><div class="panel-body"><div class="deadline-metrics"><p><strong>${r.on_time}</strong> no prazo</p><p><strong>${r.late_delivery}</strong> após o prazo</p><p><strong>${r.undated_delivery}</strong> sem data histórica</p></div><p class="subtitle">${r.on_time_rate === null ? "Sem datas de conclusão suficientes." : r.on_time_rate + "% das entregas com data registrada foram concluídas no prazo."} Entregas anteriores à atualização não recebem datas estimadas.</p></div></section></div><div class="grid-two"><section class="panel"><div class="panel-head"><div><h2>Por pessoa</h2><p>Tarefas compartilhadas contam para cada responsável; o total conta conteúdos únicos.</p></div></div>${breakdown(r.people, "Pessoa")}</section><section class="panel"><div class="panel-head"><div><h2>Por canal</h2><p>Um conteúdo pode aparecer em mais de um canal.</p></div></div>${breakdown(r.channels, "Canal")}</section></div><section class="panel report-section"><div class="panel-head"><h2>Entregas concluídas · ${r.delivered}</h2></div>${data.tasks.some(isDelivered) ? table(data.tasks.filter(isDelivered)) : empty("Nenhuma entrega concluída neste período.", "")}</section><section class="panel report-section"><div class="panel-head"><h2>Demandas em aberto · ${r.pending}</h2></div>${data.tasks.some((t) => !isDelivered(t)) ? table(data.tasks.filter((t) => !isDelivered(t))) : empty("Nenhuma demanda em aberto neste período.", "")}</section><div class="notice"><strong>Métricas das redes sociais</strong><br>Instagram, YouTube e TikTok ainda não estão conectados às APIs oficiais. Visualizações, alcance e engajamento não fazem parte deste relatório de produção.</div>`
   );
 }
 async function downloadReport(button) {
@@ -1082,4 +1088,11 @@ function deleteTasks(ids) {
     ids.forEach(id=>selectedTasks.delete(id));toast(`${result.deleted} tarefa(s) excluída(s).`);
   },'Confirmar exclusão');
   $('#modal-form [type="submit"]').classList.add('danger');
+}
+
+function responsiblesPicker(selected=[]) {
+  return `<fieldset class="full channel-picker"><legend>Responsáveis</legend>${data.users.map(u=>`<label class="channel-choice"><input type="checkbox" name="responsibles" value="${u.id}" ${selected.includes(u.id) ? 'checked' : ''}>${esc(u.name)}</label>`).join('')}<small>Selecione as pessoas que trabalharão neste conteúdo. Isso não cria tarefas duplicadas.</small></fieldset>`;
+}
+function selectedResponsibles() {
+  return $$('#modal [name="responsibles"]:checked').map(input=>Number(input.value));
 }

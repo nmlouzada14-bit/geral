@@ -16,8 +16,8 @@ def summarize(tasks, users, channels, start, end):
     def row(name, items):
         n=len(items);done=sum(t['status'] in DONE for t in items)
         return dict(name=name,planned=n,delivered=done,pending=n-done,posted=sum(t['status']=='Postado' for t in items),overdue=sum(t['overdue'] or t['status']=='Atrasado' for t in items),rate=round(done/n*100,1) if n else 0)
-    people=[row(u['name'],[t for t in tasks if t['responsible_id']==u['id']]) for u in users]
-    people.append(row('Sem responsável',[t for t in tasks if not t['responsible_id']]))
+    people=[row(u['name'],[t for t in tasks if u['id'] in t['responsible_ids']]) for u in users]
+    people.append(row('Sem responsável',[t for t in tasks if not t['responsible_ids']]))
     distribution=[row(c['name'],[t for t in tasks if c['id'] in t['channel_ids']]) for c in channels]
     return dict(start=str(start),end=str(end),**row('Total',tasks),statuses=dict(statuses),
         on_time=on_time,late_delivery=len(dated)-on_time,undated_delivery=len(delivered)-len(dated),
@@ -69,13 +69,14 @@ def make_pdf(report,tasks,users,channels,generated):
     story.append(paragraph(f"Entregues no prazo: {report['on_time']}. Entregues após o prazo: {report['late_delivery']}. Sem data histórica de conclusão: {report['undated_delivery']}. Datas de conclusão só estão disponíveis para transições registradas a partir desta versão; não estimamos datas antigas."))
     for key,title in [('people','Demandas por pessoa'),('channels','Distribuição por canal')]:
         story.extend([Spacer(1,12),paragraph(title,'Heading2')])
+        if key=='people':story.append(paragraph('Uma tarefa compartilhada aparece para cada responsável. O total geral conta cada conteúdo uma única vez.'))
         if key=='channels':story.append(paragraph('Um conteúdo com vários canais aparece em cada canal. A soma por canal pode ultrapassar o total de conteúdos.'))
         table(['Pessoa' if key=='people' else 'Canal','Planejadas','Entregues','Em aberto','Atrasadas'],[[r['name'],r['planned'],r['delivered'],r['pending'],r['overdue']] for r in report[key]] or [['Sem demandas',0,0,0,0]],[211,80,80,80,80])
     names={u['id']:u['name'] for u in users};channel_names={c['id']:c['name'] for c in channels}
     for delivered,title in [(True,'Entregas concluídas'),(False,'Demandas em aberto')]:
         story.extend([Spacer(1,12),paragraph(title,'Heading2')])
         items=[t for t in tasks if (t['status'] in DONE)==delivered]
-        rows=[[f"#{t['id']} · {t['title']}",display(t['deadline']),names.get(t['responsible_id'],'Sem responsável'),'\n'.join(channel_names[x] for x in t['channel_ids']),t['status']] for t in items]
+        rows=[[f"#{t['id']} · {t['title']}",display(t['deadline']),'\n'.join(names[uid] for uid in t['responsible_ids']) or 'Sem responsável','\n'.join(channel_names[x] for x in t['channel_ids']),t['status']] for t in items]
         if rows:table(['Conteúdo','Deadline','Responsável','Canais','Status'],rows,[175,67,92,107,90])
         else:story.append(paragraph('Nenhuma demanda neste grupo.'))
     story.extend([Spacer(1,12),paragraph('Métricas sociais: visualizações, alcance e engajamento não estão incluídos. As contas das redes sociais ainda não foram conectadas às APIs oficiais.')])

@@ -96,6 +96,60 @@ class Workflow(unittest.TestCase):
         self.call('delete',f'/formats/{fid}')
         with m.db() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM suppressed_slots').fetchone()[0],0)
 
+    def test_multiple_responsibles_sync_and_reporting(self):
+        ch=self.channel()
+        self.call('post','/users',{'name':'Parceiro Teste','email':'partner@example.com','role':'Editor'},201)
+        uid=next(u['id'] for u in self.state()['users'] if u['email']=='partner@example.com')
+        fields={'name':'Original','channel_ids':[ch],'responsible_ids':[1],'frequency':{str(m.today().weekday()):1},'active_from':str(m.today())}
+        self.call('post','/formats',fields,201)
+        state=self.state();fid=state['formats'][0]['id'];auto=state['tasks'][0]
+        manual=self.task(title='Título personalizado',format_id=fid,responsible_ids=[1],status='Finalizado')[0]
+        unrelated=self.task(responsible_ids=[1])[0]
+        before=self.call('get',f'/tasks/{manual}')
+        self.call('post',f'/tasks/{manual}/comments',{'body':'Preservar'},201)
+        self.call('patch',f'/formats/{fid}',{**fields,'name':'Atualizado','responsible_ids':[uid,1,uid]})
+        for tid in [auto['id'],manual]:
+            t=self.call('get',f'/tasks/{tid}')
+            self.assertEqual(t['responsible_ids'],[1,uid]);self.assertEqual(t['version'],2)
+        self.assertEqual(self.call('get',f'/tasks/{auto["id"]}')['title'],'Atualizado · 1')
+        final=self.call('get',f'/tasks/{manual}')
+        for key in ['title','status','deadline','completed_at','description']:
+            self.assertEqual(final[key],before[key])
+        self.assertEqual(len(self.call('get',f'/tasks/{manual}/comments')['comments']),1)
+        self.assertEqual(self.call('get',f'/tasks/{unrelated}')['responsible_ids'],[1])
+        self.call('patch',f'/tasks/{manual}',{'version':1,'status':'Pendente'},409)
+        query=f'?start={m.today()}&end={m.today()}'
+        report=self.call('get','/insights'+query)['report']
+        self.assertEqual(report['planned'],3)
+        self.assertEqual(next(p for p in report['people'] if p['name']=='Parceiro Teste')['planned'],2)
+        from pypdf import PdfReader
+        response=self.client.get('/api/insights.pdf'+query)
+        self.assertIn('Parceiro Teste',''.join(p.extract_text() for p in PdfReader(io.BytesIO(response.data)).pages))
+        response.close()
+        later=m.today()+timedelta(days=7)
+        new=self.call('get',f'/state?start={later}&end={later}')['tasks']
+        self.assertEqual(len(new),1);self.assertEqual(new[0]['responsible_ids'],[1,uid])
+        self.call('patch',f'/tasks/{manual}',{'version':2,'responsible_ids':[uid]})
+        m.init()
+        self.assertEqual(self.call('get',f'/tasks/{manual}')['responsible_ids'],[uid])
+        # Saving an unchanged format must not overwrite a per-task adjustment.
+        self.call('patch',f'/formats/{fid}',{**fields,'name':'Atualizado','responsible_ids':[1,uid]})
+        self.assertEqual(self.call('get',f'/tasks/{manual}')['responsible_ids'],[uid])
+        self.call('patch',f'/formats/{fid}',{**fields,'name':'Atualizado','responsible_ids':[uid]})
+        self.assertEqual(self.call('get',f'/tasks/{auto["id"]}')['responsible_ids'],[uid])
+
+    def test_manual_responsibles_validation_clear_and_legacy(self):
+        ids=self.task(responsible_ids=[1,1],quantity=2)
+        self.assertEqual(len(ids),2)
+        for tid in ids:self.assertEqual(self.call('get',f'/tasks/{tid}')['responsible_ids'],[1])
+        self.call('patch',f'/tasks/{ids[0]}',{'version':1,'responsible_ids':[]})
+        self.assertEqual(self.call('get',f'/tasks/{ids[0]}')['responsible_ids'],[])
+        self.call('patch',f'/tasks/{ids[0]}',{'version':2,'responsible_id':1})
+        self.assertEqual(self.call('get',f'/tasks/{ids[0]}')['responsible_ids'],[1])
+        for values in [[999999],None,'1',[True],[1.5]]:
+            self.call('post','/tasks',{'title':'Inválida','deadline':str(m.today()),'responsible_ids':values},400)
+        self.assertEqual(len(self.state()['tasks']),2)
+
     def test_auth_and_admin_enforced_server_side(self):
         other=m.app.test_client()
         self.call('get','/state',expected=401,client=other)
@@ -245,18 +299,19 @@ class Workflow(unittest.TestCase):
             self.assertGreater(len(pdf.pages),3)
             self.assertIn('45',''.join(p.extract_text() for p in pdf.pages))
 
-    def test_format_edit_preserves_existing_deliveries(self):
+    def test_format_edit_updates_existing_deliveries(self):
         ch=self.channel()
         self.call('post','/formats',{'name':'Original','channel_ids':[ch],'responsible_id':1,'frequency':{str(m.today().weekday()):1},'active_from':str(m.today())},201)
         state=self.state();f=state['formats'][0];t=state['tasks'][0]
         self.call('post','/channels',{'name':'YouTube','url':'https://youtube.com/example','color':'#102b55'},201)
         second=self.state()['channels'][1]['id']
         self.call('patch',f"/formats/{f['id']}",{'name':'Novo','channel_ids':[ch,second],'responsible_id':1,'frequency':{str(m.today().weekday()):1},'active_from':str(m.today())})
-        self.assertEqual(self.state()['tasks'][0]['channel_ids'],[ch])
+        self.assertEqual(self.state()['tasks'][0]['channel_ids'],[ch,second])
+        self.assertEqual(self.state()['tasks'][0]['title'],'Novo · 1')
         nextweek=m.today()+timedelta(days=7)
         new=self.call('get',f'/state?start={nextweek}&end={nextweek}')['tasks']
         self.assertEqual(len(new),1);self.assertEqual(new[0]['channel_ids'],[ch,second])
-        self.call('patch',f"/tasks/{t['id']}",{'version':1,'channel_ids':[ch,second]})
+        self.call('patch',f"/tasks/{t['id']}",{'version':2,'channel_ids':[ch,second]})
         self.assertEqual(len(self.state()['tasks']),1)
 
     def test_manual_multichannel_and_retry_are_not_duplicates(self):

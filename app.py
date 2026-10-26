@@ -42,8 +42,8 @@ def init():
     with db() as source:
         old = source.execute("SELECT 1 FROM sqlite_master WHERE name='tasks'").fetchone()
         version = source.execute('PRAGMA user_version').fetchone()[0]
-        if old and version < 2:
-            backup = DATA / 'backups' / 'before-v2.sqlite'
+        if old and version < 3:
+            backup = DATA / 'backups' / ('before-v2.sqlite' if version < 2 else 'before-v3.sqlite')
             backup.parent.mkdir(exist_ok=True)
             if not backup.exists():
                 with sqlite3.connect(backup) as target:
@@ -79,6 +79,11 @@ def init():
             c.execute('CREATE INDEX IF NOT EXISTS tasks_deadline ON tasks(deadline)')
             c.execute('CREATE INDEX IF NOT EXISTS comments_task ON comments(task_id,id)')
             c.execute('PRAGMA user_version=2')
+        if c.execute('PRAGMA user_version').fetchone()[0] < 3:
+            for kind, table in [('task','tasks'),('format','formats')]:
+                c.execute(f'CREATE TABLE {kind}_responsibles({kind}_id INTEGER NOT NULL REFERENCES {table}(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id), PRIMARY KEY({kind}_id,user_id))')
+                c.execute(f'INSERT INTO {kind}_responsibles SELECT id,responsible_id FROM {table} WHERE responsible_id IS NOT NULL')
+            c.execute('PRAGMA user_version=3')
         if not c.execute('SELECT id FROM users WHERE email=?', (ADMIN,)).fetchone():
             pw = os.environ.get('INITIAL_PASSWORD')
             if not pw or len(pw) < 7:
@@ -278,6 +283,23 @@ def set_channels(c, kind, id, ids):
     c.executemany(f'INSERT INTO {kind}_channels({kind}_id,channel_id) VALUES(?,?)', [(id, ch) for ch in ids])
 
 
+def responsible_ids(c,d,required=False):
+    values=d.get('responsible_ids') if 'responsible_ids' in d else ([int(d['responsible_id'])] if d.get('responsible_id') else [])
+    if not isinstance(values,list) or len(values)>100 or any(type(v) is not int or v<=0 for v in values): abort(400,'Selecione até 100 responsáveis.')
+    ids=sorted({ref(c,'users',v,True) for v in values})
+    if required and not ids: abort(400,'Selecione pelo menos um responsável.')
+    return ids
+
+
+def linked_responsibles(c,kind,id):
+    return [r[0] for r in c.execute(f'SELECT user_id FROM {kind}_responsibles WHERE {kind}_id=? ORDER BY user_id',(id,))]
+
+
+def set_responsibles(c,kind,id,ids):
+    c.execute(f'DELETE FROM {kind}_responsibles WHERE {kind}_id=?',(id,))
+    c.executemany(f'INSERT INTO {kind}_responsibles VALUES(?,?)',[(id,uid) for uid in ids])
+
+
 def now():
     return datetime.now(ZoneInfo('America/Sao_Paulo')).isoformat(timespec='seconds')
 
@@ -290,10 +312,12 @@ def formats():
     with db() as c:
         c.execute('BEGIN IMMEDIATE')
         ids=channel_ids(c,d,True)
+        people=responsible_ids(c,d,True)
         inherited=c.execute('SELECT color FROM channels WHERE id=?',(ids[0],)).fetchone()[0]
         cur=c.execute('INSERT INTO formats(name,channel_id,responsible_id,color,frequency,active_from) VALUES(?,?,?,?,?,?)',
-            (text(d,'name'),ids[0],ref(c,'users',d.get('responsible_id'),True),inherited,json.dumps(freq),iso(d['active_from'])))
+            (text(d,'name'),ids[0],people[0],inherited,json.dumps(freq),iso(d['active_from'])))
         set_channels(c,'format',cur.lastrowid,ids)
+        set_responsibles(c,'format',cur.lastrowid,people)
     return {'ok':True},201
 
 
@@ -310,13 +334,32 @@ def update_format(id):
             if d['active'] and not linked_channels(c,'format',id): abort(400,'Edite o formato e selecione um canal antes de retomar.')
             c.execute('UPDATE formats SET active=? WHERE id=?',(int(d['active']),id))
         else:
-            ids=channel_ids(c,d,True); freq=frequency(d['frequency'])
+            ids=channel_ids(c,d,True); freq=frequency(d['frequency']); people=responsible_ids(c,d,True)
             if not freq: abort(400,'Escolha pelo menos um dia.')
             inherited=c.execute('SELECT color FROM channels WHERE id=?',(ids[0],)).fetchone()[0]
+            old_channels=linked_channels(c,'format',id); old_people=linked_responsibles(c,'format',id)
             c.execute('UPDATE formats SET name=?,channel_id=?,responsible_id=?,color=?,frequency=?,active_from=? WHERE id=?',
-                (text(d,'name'),ids[0],ref(c,'users',d.get('responsible_id'),True),inherited,json.dumps(freq),iso(d['active_from']),id))
+                (text(d,'name'),ids[0],people[0],inherited,json.dumps(freq),iso(d['active_from']),id))
             set_channels(c,'format',id,ids)
-            # Existing deliveries remain as edited by the team; only new slots inherit changes.
+            set_responsibles(c,'format',id,people)
+            # Propagate only changed shared fields, preserving task-specific work and deadlines.
+            for task in c.execute('SELECT * FROM tasks WHERE format_id=?',(id,)).fetchall():
+                updates={}
+                if old_people!=people:
+                    updates['responsible_id']=people[0]
+                    set_responsibles(c,'task',task['id'],people)
+                if old_channels!=ids:
+                    updates['channel_id']=ids[0]
+                    set_channels(c,'task',task['id'],ids)
+                if json.loads(old['frequency'])!=freq: updates['frequency']=json.dumps(freq)
+                if old['name']!=text(d,'name'):
+                    # Keep custom briefs/titles; rename titles inherited from this format.
+                    suffix=task['title'][len(old['name']):] if task['title'].startswith(old['name']) else None
+                    if suffix=='' or (suffix is not None and re.fullmatch(r' · \d+',suffix)):
+                        updates['title']=text(d,'name')+suffix
+                if updates:
+                    assignments=','.join(key+'=?' for key in updates)
+                    c.execute(f'UPDATE tasks SET {assignments},version=version+1 WHERE id=?',(*updates.values(),task['id']))
     return {'ok':True}
 
 
@@ -345,7 +388,9 @@ def generate(c,start,end):
                 task_id=c.execute('INSERT INTO task_id_sequence DEFAULT VALUES').lastrowid
                 cur=c.execute('INSERT OR IGNORE INTO tasks(id,title,deadline,responsible_id,channel_id,format_id,status,frequency,slot) VALUES(?,?,?,?,?,?,?,?,?)',
                     (task_id,f"{f['name']} · {n+1}",str(day),f['responsible_id'],ids[0] if ids else None,f['id'],'Pendente',f['frequency'],slot))
-                if cur.rowcount: set_channels(c,'task',cur.lastrowid,ids)
+                if cur.rowcount:
+                    set_channels(c,'task',cur.lastrowid,ids)
+                    set_responsibles(c,'task',cur.lastrowid,linked_responsibles(c,'format',f['id']))
             day+=timedelta(days=1)
 
 
@@ -360,13 +405,16 @@ def date_range():
 def enrich_tasks(c, tasks):
     if not tasks: return tasks
     ids={t['id'] for t in tasks}
-    links={}; attachments={}
+    links={}; attachments={}; people={}
+    for r in c.execute('SELECT task_id,user_id FROM task_responsibles ORDER BY user_id'):
+        if r['task_id'] in ids: people.setdefault(r['task_id'],[]).append(r['user_id'])
     for r in c.execute('SELECT task_id,channel_id FROM task_channels ORDER BY channel_id'):
         if r['task_id'] in ids: links.setdefault(r['task_id'],[]).append(r['channel_id'])
     for r in c.execute('SELECT id,task_id,name FROM attachments'):
         if r['task_id'] in ids: attachments.setdefault(r['task_id'],[]).append(dict(r))
     for t in tasks:
         t['channel_ids']=links.get(t['id'],[])
+        t['responsible_ids']=people.get(t['id'],[])
         t['attachments']=attachments.get(t['id'],[])
         t['archived']=t['status'] in DONE
         t['overdue']=t['deadline']<str(today()) and t['status'] not in DONE
@@ -385,7 +433,7 @@ def state():
     start,end=date_range()
     with db() as c:
         tasks=period_tasks(c,start,end)
-        formats=[{**dict(f),'channel_ids':linked_channels(c,'format',f['id'])} for f in c.execute('SELECT * FROM formats ORDER BY name')]
+        formats=[{**dict(f),'channel_ids':linked_channels(c,'format',f['id']),'responsible_ids':linked_responsibles(c,'format',f['id'])} for f in c.execute('SELECT * FROM formats ORDER BY name')]
         mentions=[dict(r) for r in c.execute('SELECT m.comment_id,c.task_id,c.created_at,t.title,u.name AS author FROM comment_mentions m JOIN comments c ON c.id=m.comment_id JOIN tasks t ON t.id=c.task_id JOIN users u ON u.id=c.author_id WHERE m.user_id=? AND m.read_at IS NULL ORDER BY c.id DESC',(session['uid'],))]
         return {'tasks':tasks,'users':[public_user(u) for u in c.execute('SELECT * FROM users ORDER BY name')],
             'channels':[dict(r) for r in c.execute('SELECT * FROM channels ORDER BY name')],
@@ -494,6 +542,7 @@ def create_task():
             task_id=c.execute('INSERT INTO task_id_sequence DEFAULT VALUES').lastrowid
             cur=c.execute('INSERT INTO tasks(id,title,description,deadline,responsible_id,channel_id,format_id,status,frequency,batch) VALUES(:id,:title,:description,:deadline,:responsible_id,:channel_id,:format_id,:status,:frequency,:batch)',{**f,'id':task_id,'frequency':json.dumps(freq),'batch':batch})
             set_channels(c,'task',cur.lastrowid,ids_channels)
+            set_responsibles(c,'task',cur.lastrowid,responsible_ids(c,d))
             if f['status'] in DONE: c.execute('UPDATE tasks SET completed_at=? WHERE id=?',(now(),cur.lastrowid))
             ids.append(cur.lastrowid)
         if request_id:
@@ -505,7 +554,7 @@ def task_fields(c,d,allowed_deleted=()):
     if status not in STATES: abort(400,'Status inválido.')
     ids=channel_ids(c,d,allowed_deleted=allowed_deleted); channel=ids[0] if ids else None; fmt=ref(c,'formats',d.get('format_id'))
     return dict(title=text(d,'title'),description=text(d,'description',20000,False),deadline=iso(d['deadline']),
-        responsible_id=ref(c,'users',d.get('responsible_id')),channel_id=channel,format_id=fmt,status=status)
+        responsible_id=next(iter(responsible_ids(c,d)),None),channel_id=channel,format_id=fmt,status=status)
 
 @app.patch('/api/tasks/<int:id>')
 @auth()
@@ -516,7 +565,8 @@ def update_task(id):
         old=c.execute('SELECT * FROM tasks WHERE id=?',(id,)).fetchone()
         if not old: abort(404)
         if d.get('version')!=old['version']: abort(409,'Esta tarefa foi atualizada por outra pessoa. Feche e abra novamente para carregar a versão atual.')
-        merged={**dict(old),'channel_ids':linked_channels(c,'task',id),**d}
+        merged={**dict(old),'channel_ids':linked_channels(c,'task',id),'responsible_ids':linked_responsibles(c,'task',id),**d}
+        if 'responsible_id' in d and 'responsible_ids' not in d: merged.pop('responsible_ids',None)
         if 'channel_id' in d and 'channel_ids' not in d: merged.pop('channel_ids',None)
         existing_channels=linked_channels(c,'task',id)
         ids_channels=channel_ids(c,merged,allowed_deleted=existing_channels)
@@ -524,6 +574,7 @@ def update_task(id):
         changed=c.execute('UPDATE tasks SET title=:title,description=:description,deadline=:deadline,responsible_id=:responsible_id,channel_id=:channel_id,format_id=:format_id,status=:status,frequency=:frequency,version=version+1 WHERE id=:id AND version=:version', {**f,'frequency':json.dumps(freq),'id':id,'version':old['version']}).rowcount
         if not changed: abort(409,'Esta tarefa foi atualizada por outra pessoa. Reabra a tarefa.')
         set_channels(c,'task',id,ids_channels)
+        set_responsibles(c,'task',id,responsible_ids(c,merged))
         completed=(old['completed_at'] if old['status'] in DONE else now()) if f['status'] in DONE else None
         c.execute('UPDATE tasks SET completed_at=? WHERE id=?',(completed,id))
     return {'ok':True}
