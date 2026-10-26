@@ -9,6 +9,8 @@ const esc = (v) =>
         c
       ],
   );
+const selectedTasks = new Set();
+const activeChannels = () => data.channels.filter(c => !c.deleted);
 const doneStates = ["Finalizado", "Agendado", "Postado"];
 const isDelivered = (t) => doneStates.includes(t.status);
 let insightReport = null,
@@ -244,6 +246,7 @@ function filtered() {
   );
 }
 function table(tasks, grouped = false) {
+  const selectable = page === "tasks" && view === "list";
   if (!tasks.length)
     return empty(
       "Tudo começa com uma boa pauta.",
@@ -261,15 +264,15 @@ function table(tasks, grouped = false) {
     : new Map([["all", tasks]]);
   for (const [key, items] of groups) {
     if (grouped && items.length > 1)
-      rows += `<tr class="group-row"><td colspan="5">▾ &nbsp; ${esc(format(items[0].format_id)?.name || "Lote de tarefas")} <span class="muted">· ${items.length} entregas · semana de ${fmt(monday(items[0].deadline))}</span></td></tr>`;
+      rows += `<tr class="group-row"><td colspan="${selectable ? 6 : 5}">▾ &nbsp; ${esc(format(items[0].format_id)?.name || "Lote de tarefas")} <span class="muted">· ${items.length} entregas · semana de ${fmt(monday(items[0].deadline))}</span></td></tr>`;
     rows += items
       .map(
         (t) =>
-          `<tr data-task="${t.id}" tabindex="0" role="button" aria-label="Abrir ${esc(t.title)}"><td><div class="task-title"><span class="dot" style="--accent:${taskColor(t)}"></span>${esc(t.title)}<small class="task-origin">#${t.id} · ${t.slot?"Automática":"Avulsa"}</small></div></td><td>${channelTag(t)}</td><td>${assigned(t.responsible_id)}</td><td>${fmt(t.deadline)}${t.overdue ? '<span class="late">Atrasada</span>' : ""}</td><td>${badge(t.status)}</td></tr>`,
+          `<tr data-task="${t.id}" tabindex="0" role="button" aria-label="Abrir ${esc(t.title)}">${selectable ? `<td><input type="checkbox" data-select-task="${t.id}" aria-label="Selecionar ${esc(t.title)}" ${selectedTasks.has(t.id) ? "checked" : ""}></td>` : ""}<td><div class="task-title"><span class="dot" style="--accent:${taskColor(t)}"></span>${esc(t.title)}<small class="task-origin">#${t.id} · ${t.slot?"Automática":"Avulsa"}</small></div></td><td>${channelTag(t)}</td><td>${assigned(t.responsible_id)}</td><td>${fmt(t.deadline)}${t.overdue ? '<span class="late">Atrasada</span>' : ""}</td><td>${badge(t.status)}</td></tr>`,
       )
       .join("");
   }
-  return `<div class="table-wrap"><table><thead><tr><th>Tarefa</th><th>Canal</th><th>Responsável</th><th>Deadline</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr>${selectable ? `<th><input type="checkbox" data-select-table aria-label="Selecionar todas desta lista" ${tasks.every(t=>selectedTasks.has(t.id)) ? "checked" : ""}></th>` : ""}<th>Tarefa</th><th>Canal</th><th>Responsável</th><th>Deadline</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 function dashboard() {
   const counts = states.map(
@@ -336,6 +339,7 @@ function dashboard() {
 }
 function tasksPage() {
   const tasks = filtered();
+  for (const id of selectedTasks) if (!tasks.some(t=>t.id===id)) selectedTasks.delete(id);
   const active = tasks.filter((t) => !isDelivered(t)),
     archived = tasks.filter(isDelivered);
   return (
@@ -347,7 +351,7 @@ function tasksPage() {
     periodControl() +
     `<div class="task-tools"><div class="segmented"><button data-view="list" class="${view === "list" ? "selected" : ""}">☷ Lista</button><button data-view="kanban" class="${view === "kanban" ? "selected" : ""}">▥ Kanban</button></div><div class="filters"><input id="search" aria-label="Buscar tarefas" placeholder="Buscar tarefa…" value="${esc(search)}"><select id="filter-status" aria-label="Filtrar status"><option value="">Todos os status</option>${states.map((s) => `<option ${filterStatus === s ? "selected" : ""}>${s}</option>`).join("")}</select><select id="filter-person" aria-label="Filtrar responsável"><option value="">Toda a equipe</option>${data.users.map((u) => `<option value="${u.id}" ${filterPerson === String(u.id) ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></div></div>${
       view === "list"
-        ? `<div class="toolbar"><small>${tasks.length} entregas no período</small><label class="checkbox"><input id="group" type="checkbox" ${group ? "checked" : ""}>Agrupar por formato e semana</label></div><section class="panel">${active.length ? table(active, group) : empty("Nenhuma demanda em aberto neste filtro.", "As entregas concluídas ficam no quadro abaixo.")}</section><details class="archive-box panel" id="archive-box" ${archiveOpen || doneStates.includes(filterStatus) ? "open" : ""}><summary>Finalizadas / arquivadas <span class="badge">${archived.length}</span><small>Finalizados, agendados e postados · período selecionado</small></summary>${archived.length ? table(archived, group) : empty("Nenhuma entrega arquivada neste filtro.", "Ao finalizar uma tarefa, ela aparecerá aqui.")}</details>`
+        ? `<div class="toolbar"><small>${tasks.length} entregas no período</small><button class="danger" id="delete-selected" ${selectedTasks.size ? "" : "disabled"}>Excluir selecionadas (${selectedTasks.size})</button><label class="checkbox"><input id="group" type="checkbox" ${group ? "checked" : ""}>Agrupar por formato e semana</label></div><section class="panel">${active.length ? table(active, group) : empty("Nenhuma demanda em aberto neste filtro.", "As entregas concluídas ficam no quadro abaixo.")}</section><details class="archive-box panel" id="archive-box" ${archiveOpen || doneStates.includes(filterStatus) ? "open" : ""}><summary>Finalizadas / arquivadas <span class="badge">${archived.length}</span><small>Finalizados, agendados e postados · período selecionado</small></summary>${archived.length ? table(archived, group) : empty("Nenhuma entrega arquivada neste filtro.", "Ao finalizar uma tarefa, ela aparecerá aqui.")}</details>`
         : `<div class="kanban">${states
             .map((s, i) => {
               const items = tasks.filter((t) => t.status === s);
@@ -373,7 +377,7 @@ function editorial() {
       "",
       "PLANEJAMENTO",
     ) +
-    `<div class="notice">Cada formato gera entregas automaticamente nos dias escolhidos. As tarefas são criadas ao abrir o período, sem duplicações, e aparecem na lista e no calendário.</div><div class="section-heading"><h2>Canais <small>· ${data.channels.length}</small></h2><button data-action="new-channel">＋ Criar canal</button></div>${data.channels.length ? `<div class="editorial-grid">${data.channels.map((c) => `<article class="channel-card" style="--accent:${c.color}"><span class="badge" style="--ink:${c.color};--tint:${c.color}12">CANAL</span><h3>${esc(c.name)}</h3><a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.url)} ↗</a><p class="subtitle">${data.formats.filter((f) => (f.channel_ids || [f.channel_id]).includes(c.id)).length} formatos cadastrados</p></article>`).join("")}</div>` : `<div class="panel">${empty("Onde seu conteúdo vai aparecer?", "Cadastre os perfis e canais usados pelo time.")}</div>`}<div class="section-heading"><h2>Formatos <small>· ${data.formats.length}</small></h2><button class="primary" data-action="new-format">＋ Criar formato</button></div><section class="panel">${data.formats.length ? data.formats.map((f) => `<div class="format-row"><span class="dot" style="--accent:${taskColor(f)}"></span><div class="format-info"><h3>${esc(f.name)} ${!f.active ? '<span class="badge">Pausado</span>' : ""}</h3><p>${channelTag(f)} · ${esc(person(f.responsible_id)?.name)} · A partir de ${fmt(f.active_from)}</p><div class="frequency-summary">${freqSummary(f.frequency)}</div></div><button data-edit-format="${f.id}">Editar</button><button class="danger" data-delete-format="${f.id}">Excluir</button><button data-toggle-format="${f.id}">${f.active ? "Pausar" : "Retomar"}</button></div>`).join("") : empty("Qual é o ritmo da sua produção?", "Selecione os dias, as quantidades e a pessoa responsável por cada formato.")} </section><p class="subtitle">Pausar impede novas gerações. As tarefas que já foram criadas permanecem disponíveis.</p>`
+    `<div class="notice">Cada formato gera entregas automaticamente nos dias escolhidos. As tarefas são criadas ao abrir o período, sem duplicações, e aparecem na lista e no calendário.</div><div class="section-heading"><h2>Canais <small>· ${activeChannels().length}</small></h2><button data-action="new-channel">＋ Criar canal</button></div>${activeChannels().length ? `<div class="editorial-grid">${activeChannels().map((c) => `<article class="channel-card" style="--accent:${c.color}"><span class="badge" style="--ink:${c.color};--tint:${c.color}12">CANAL</span><h3>${esc(c.name)}</h3><a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.url)} ↗</a><p class="subtitle">${data.formats.filter((f) => (f.channel_ids || [f.channel_id]).includes(c.id)).length} formatos cadastrados</p><div class="channel-actions"><button data-edit-channel="${c.id}">Editar</button><button class="danger" data-delete-channel="${c.id}">Excluir</button></div></article>`).join("")}</div>` : `<div class="panel">${empty("Onde seu conteúdo vai aparecer?", "Cadastre os perfis e canais usados pelo time.")}</div>`}<div class="section-heading"><h2>Formatos <small>· ${data.formats.length}</small></h2><button class="primary" data-action="new-format">＋ Criar formato</button></div><section class="panel">${data.formats.length ? data.formats.map((f) => `<div class="format-row"><span class="dot" style="--accent:${taskColor(f)}"></span><div class="format-info"><h3>${esc(f.name)} ${!f.active ? '<span class="badge">Pausado</span>' : ""}</h3><p>${channelTag(f)} · ${esc(person(f.responsible_id)?.name)} · A partir de ${fmt(f.active_from)}</p><div class="frequency-summary">${freqSummary(f.frequency)}</div></div><button data-edit-format="${f.id}">Editar</button><button class="danger" data-delete-format="${f.id}">Excluir</button><button data-toggle-format="${f.id}">${f.active ? "Pausar" : "Retomar"}</button></div>`).join("") : empty("Qual é o ritmo da sua produção?", "Selecione os dias, as quantidades e a pessoa responsável por cada formato.")} </section><p class="subtitle">Pausar impede novas gerações. As tarefas que já foram criadas permanecem disponíveis.</p>`
   );
 }
 function calendarRange() {
@@ -567,36 +571,24 @@ async function openTask(id) {
     updateSummary();
   };
   updateSummary();
-  if (editing) attachComments(id);
+  if (editing) {
+    attachComments(id);
+    const button=document.createElement('button');button.type='button';button.className='danger';button.textContent='Excluir tarefa';
+    button.onclick=()=>deleteTasks([id]);$('#modal-form .modal-foot').prepend(button);
+  }
 }
 
-function openChannel() {
-  modal(
-    "Criar canal",
-    field(
-      "Nome do canal",
-      "name",
-      "text",
-      "",
-      'required placeholder="Instagram Claudio Zayed" maxlength="200"',
-    ) +
-      field(
-        "Link do canal",
-        "url",
-        "url",
-        "",
-        'required placeholder="https://instagram.com/..."',
-      ) +
-      field("Cor do canal", "color", "color", "#3b82f6"),
-    async (d) => {
-      await api("/channels", "POST", d);
-      toast("Canal criado.");
-    },
-    "Criar canal",
-  );
+function openChannel(id) {
+  const c = channel(id);
+  modal(c ? 'Editar canal' : 'Criar canal',
+    field('Nome do canal','name','text',c?.name || '', 'required maxlength="200"') +
+    field('Link do canal','url','url',c?.url || '', 'required placeholder="https://instagram.com/..."') +
+    field('Cor do canal','color','color',c?.color || '#3b82f6'),
+    async d => { await api(c ? '/channels/'+id : '/channels',c ? 'PATCH' : 'POST',d); toast(c ? 'Canal atualizado.' : 'Canal criado.'); },
+    c ? 'Salvar alterações' : 'Criar canal');
 }
 function openFormat(id) {
-  if (!data.channels.length) {
+  if (!activeChannels().length) {
     toast("Cadastre um canal antes de criar o formato.");
     openChannel();
     return;
@@ -655,6 +647,20 @@ function navigate(p) {
   refresh();
 }
 function bind() {
+  $$('[data-edit-channel]').forEach(b=>b.onclick=()=>openChannel(Number(b.dataset.editChannel)));
+  $$('[data-delete-channel]').forEach(b=>b.onclick=()=>deleteChannel(Number(b.dataset.deleteChannel)));
+  $$('[data-select-task]').forEach(b=>b.onchange=()=>{
+    const id=Number(b.dataset.selectTask);
+    if(b.checked && selectedTasks.size>=500) { b.checked=false;toast('Selecione até 500 tarefas por vez.');return; }
+    b.checked ? selectedTasks.add(id) : selectedTasks.delete(id);render();
+  });
+  $$('[data-select-table]').forEach(b=>b.onchange=()=>{
+    const ids=[...b.closest('table').querySelectorAll('[data-select-task]')].map(x=>Number(x.dataset.selectTask));
+    if(b.checked && new Set([...selectedTasks,...ids]).size>500) { b.checked=false;toast('Selecione até 500 tarefas por vez.');return; }
+    ids.forEach(id=>b.checked ? selectedTasks.add(id) : selectedTasks.delete(id));render();
+  });
+  if($('#delete-selected')) $('#delete-selected').onclick=()=>deleteTasks([...selectedTasks]);
+
   $$('[data-delete-format]').forEach(b=>b.onclick=()=>deleteFormat(Number(b.dataset.deleteFormat)));
 
   if ($("#archive-box"))
@@ -669,9 +675,9 @@ function bind() {
     .querySelectorAll("[data-page]")
     .forEach((b) => (b.onclick = () => navigate(b.dataset.page)));
   $$("[data-task]").forEach((b) => {
-    b.onclick = () => openTask(Number(b.dataset.task));
+    b.onclick = (e) => { if (!e.target.closest("input,button")) openTask(Number(b.dataset.task)); };
     b.onkeydown = (e) => {
-      if (e.key === "Enter" || e.key === " ") {
+      if (e.target === b && (e.key === "Enter" || e.key === " ")) {
         e.preventDefault();
         openTask(Number(b.dataset.task));
       }
@@ -854,7 +860,8 @@ setInterval(() => {
 }, 20000);
 
 function channelsPicker(selected = []) {
-  return `<fieldset class="full channel-picker"><legend>Canais de publicação</legend>${data.channels.length ? data.channels.map((c) => `<label class="channel-choice"><input type="checkbox" name="channels" value="${c.id}" ${selected.includes(c.id) ? "checked" : ""}><span class="dot" style="--accent:${c.color}"></span>${esc(c.name)}</label>`).join("") : "<small>Cadastre os canais na Linha editorial.</small>"}<small>Selecione todos os canais que usarão este mesmo conteúdo.</small></fieldset>`;
+  const choices=data.channels.filter(c=>!c.deleted || selected.includes(c.id));
+  return `<fieldset class="full channel-picker"><legend>Canais de publicação</legend>${choices.map(c=>`<label class="channel-choice"><input type="checkbox" name="channels" value="${c.id}" ${selected.includes(c.id) ? 'checked' : ''} ${c.deleted ? 'disabled' : ''}><span class="dot" style="--accent:${c.color}"></span>${esc(c.name)}${c.deleted ? ' (excluído)' : ''}</label>`).join('') || '<small>Cadastre os canais na Linha editorial.</small>'}<small>Selecione todos os canais que usarão este mesmo conteúdo.</small></fieldset>`;
 }
 function selectedChannels() {
   return $$('#modal [name="channels"]:checked').map((x) => Number(x.value));
@@ -876,7 +883,7 @@ function insightsPage() {
     ["Conclusão", r.rate + "%"],
   ];
   const breakdown = (rows, first) =>
-    `<div class="table-wrap"><table><thead><tr><th>${first}</th><th>Planejadas</th><th>Entregues</th><th>Em aberto</th><th>Atrasadas</th></tr></thead><tbody>${rows.length ? rows.map((x) => `<tr><td>${esc(x.name)}</td><td>${x.planned}</td><td>${x.delivered}</td><td>${x.pending}</td><td>${x.overdue}</td></tr>`).join("") : '<tr><td colspan="5">Sem demandas neste período.</td></tr>'}</tbody></table></div>`;
+    `<div class="table-wrap"><table><thead><tr><th>${first}</th><th>Planejadas</th><th>Entregues</th><th>Em aberto</th><th>Atrasadas</th></tr></thead><tbody>${rows.length ? rows.map((x) => `<tr><td>${esc(x.name)}</td><td>${x.planned}</td><td>${x.delivered}</td><td>${x.pending}</td><td>${x.overdue}</td></tr>`).join("") : '<tr><td colspan="${selectable ? 6 : 5}">Sem demandas neste período.</td></tr>'}</tbody></table></div>`;
   return (
     heading(
       "Insights",
@@ -1058,5 +1065,21 @@ function deleteFormat(id){
   modal('Excluir formato',`<p>Excluir <strong>${esc(f.name)}</strong> da linha editorial?</p><div class="notice">Esse formato deixará de gerar novas entregas. Todas as tarefas já criadas serão mantidas, com seus canais, comentários e anexos.</div>`,async()=>{
     const result=await api('/formats/'+id,'DELETE');toast(`Formato excluído. ${result.preserved_tasks} tarefa(s) preservada(s).`);
   },'Excluir formato');
+  $('#modal-form [type="submit"]').classList.add('danger');
+}
+
+function deleteChannel(id) {
+  const c=channel(id);if(!c)return;
+  modal('Excluir canal',`<p>Excluir <strong>${esc(c.name)}</strong>?</p><div class="notice">As tarefas existentes mantêm seu histórico. O canal será removido dos formatos; formatos sem outro canal serão pausados até você editar e escolher um novo canal.</div>`,async()=>{
+    const result=await api('/channels/'+id,'DELETE');toast(`Canal excluído. ${result.paused_formats} formato(s) pausado(s).`);
+  },'Excluir canal');
+  $('#modal-form [type="submit"]').classList.add('danger');
+}
+function deleteTasks(ids) {
+  if(!ids.length)return;
+  modal(ids.length===1 ? 'Excluir tarefa' : 'Excluir tarefas',`<p>Excluir permanentemente <strong>${ids.length} tarefa(s)</strong>?</p><ul class="delete-preview">${ids.map(id=>`<li>#${id} · ${esc(data.tasks.find(t=>t.id===id)?.title || 'Tarefa')}</li>`).join('')}</ul><div class="notice">Os comentários e anexos dessas tarefas também serão excluídos. Entregas automáticas excluídas não serão recriadas ao abrir o calendário. As próximas entregas do formato continuam normalmente.</div>`,async()=>{
+    const result=ids.length===1 ? await api('/tasks/'+ids[0],'DELETE') : await api('/tasks/bulk-delete','POST',{ids});
+    ids.forEach(id=>selectedTasks.delete(id));toast(`${result.deleted} tarefa(s) excluída(s).`);
+  },'Confirmar exclusão');
   $('#modal-form [type="submit"]').classList.add('danger');
 }

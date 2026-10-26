@@ -58,9 +58,14 @@ def init():
         CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', deadline TEXT NOT NULL, responsible_id INTEGER REFERENCES users(id), channel_id INTEGER REFERENCES channels(id), format_id INTEGER REFERENCES formats(id), status TEXT NOT NULL, frequency TEXT NOT NULL DEFAULT '{}', batch TEXT, slot TEXT UNIQUE, version INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS attachments(id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), name TEXT NOT NULL, disk TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS task_requests(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, request_id TEXT NOT NULL, payload_hash TEXT NOT NULL, task_ids TEXT NOT NULL, PRIMARY KEY(user_id,request_id));
+        CREATE TABLE IF NOT EXISTS task_id_sequence(id INTEGER PRIMARY KEY AUTOINCREMENT);
+        CREATE TABLE IF NOT EXISTS suppressed_slots(slot TEXT PRIMARY KEY, format_id INTEGER NOT NULL REFERENCES formats(id) ON DELETE CASCADE);
         CREATE TABLE IF NOT EXISTS login_attempts(key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset_at REAL NOT NULL);
         ''')
         c.execute('BEGIN IMMEDIATE')
+        if 'deleted' not in {r['name'] for r in c.execute('PRAGMA table_info(channels)')}:
+            c.execute('ALTER TABLE channels ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0')
+        c.execute('INSERT OR IGNORE INTO task_id_sequence(id) SELECT MAX(id) FROM tasks HAVING MAX(id) IS NOT NULL')
         if c.execute('PRAGMA user_version').fetchone()[0] < 2:
             columns = {r['name'] for r in c.execute('PRAGMA table_info(tasks)')}
             if 'completed_at' not in columns:
@@ -220,10 +225,46 @@ def channels():
     with db() as c: c.execute('INSERT INTO channels(name,url,color) VALUES(?,?,?)',(text(d,'name'),url,color(d['color'])))
     return {'ok':True},201
 
-def channel_ids(c, d, required=False):
+@app.patch('/api/channels/<int:id>')
+@auth()
+def update_channel(id):
+    d=request.get_json(); url=text(d,'url',2000)
+    if urlsplit(url).scheme not in ('http','https') or not urlsplit(url).hostname: abort(400,'Informe um link http ou https.')
+    name=text(d,'name'); shade=color(d['color'])
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if not c.execute('UPDATE channels SET name=?,url=?,color=? WHERE id=? AND deleted=0',(name,url,shade,id)).rowcount: abort(404,'Canal não encontrado.')
+        c.execute('UPDATE formats SET color=? WHERE channel_id=?',(shade,id))
+    return {'ok':True}
+
+
+@app.delete('/api/channels/<int:id>')
+@auth()
+def delete_channel(id):
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if not c.execute('UPDATE channels SET deleted=1 WHERE id=? AND deleted=0',(id,)).rowcount: abort(404,'Canal não encontrado.')
+        affected=[r[0] for r in c.execute('SELECT format_id FROM format_channels WHERE channel_id=?',(id,))]
+        c.execute('DELETE FROM format_channels WHERE channel_id=?',(id,))
+        paused=0
+        for fid in affected:
+            remaining=linked_channels(c,'format',fid)
+            if remaining:
+                shade=c.execute('SELECT color FROM channels WHERE id=?',(remaining[0],)).fetchone()[0]
+                c.execute('UPDATE formats SET channel_id=?,color=? WHERE id=?',(remaining[0],shade,fid))
+            else:
+                c.execute('UPDATE formats SET active=0 WHERE id=?',(fid,));paused+=1
+        # Historical task links remain valid, but the channel cannot be selected for new work.
+    return {'ok':True,'paused_formats':paused}
+
+
+def channel_ids(c, d, required=False, allowed_deleted=()):
     values = d.get('channel_ids') if 'channel_ids' in d else ([d['channel_id']] if d.get('channel_id') else [])
     if not isinstance(values, list) or len(values) > 50: abort(400, 'Selecione até 50 canais.')
     ids = sorted({ref(c, 'channels', v, True) for v in values})
+    for id in ids:
+        if c.execute('SELECT deleted FROM channels WHERE id=?',(id,)).fetchone()[0] and id not in allowed_deleted:
+            abort(400,'Um dos canais foi excluído. Atualize a tela e escolha outro canal.')
     if required and not ids: abort(400, 'Selecione pelo menos um canal.')
     return ids
 
@@ -247,6 +288,7 @@ def formats():
     d=request.get_json(); freq=frequency(d['frequency'])
     if not freq: abort(400,'Escolha pelo menos um dia e quantidade.')
     with db() as c:
+        c.execute('BEGIN IMMEDIATE')
         ids=channel_ids(c,d,True)
         inherited=c.execute('SELECT color FROM channels WHERE id=?',(ids[0],)).fetchone()[0]
         cur=c.execute('INSERT INTO formats(name,channel_id,responsible_id,color,frequency,active_from) VALUES(?,?,?,?,?,?)',
@@ -265,6 +307,7 @@ def update_format(id):
         if not old: abort(404)
         if set(d)=={'active'}:
             if type(d['active']) is not bool: abort(400,'Estado inválido.')
+            if d['active'] and not linked_channels(c,'format',id): abort(400,'Edite o formato e selecione um canal antes de retomar.')
             c.execute('UPDATE formats SET active=? WHERE id=?',(int(d['active']),id))
         else:
             ids=channel_ids(c,d,True); freq=frequency(d['frequency'])
@@ -293,11 +336,15 @@ def generate(c,start,end):
     for f in c.execute('SELECT * FROM formats WHERE active=1').fetchall():
         freq=json.loads(f['frequency']); day=max(start,date.fromisoformat(f['active_from']))
         ids=linked_channels(c,'format',f['id'])
+        if not ids: continue
+        suppressed={r[0] for r in c.execute('SELECT slot FROM suppressed_slots WHERE format_id=?',(f['id'],))}
         while day<=end:
             for n in range(freq.get(str(day.weekday()),0)):
                 slot=f"{f['id']}:{day}:{n}"
-                cur=c.execute('INSERT OR IGNORE INTO tasks(title,deadline,responsible_id,channel_id,format_id,status,frequency,slot) VALUES(?,?,?,?,?,?,?,?)',
-                    (f"{f['name']} · {n+1}",str(day),f['responsible_id'],ids[0] if ids else None,f['id'],'Pendente',f['frequency'],slot))
+                if slot in suppressed or c.execute('SELECT id FROM tasks WHERE slot=?',(slot,)).fetchone(): continue
+                task_id=c.execute('INSERT INTO task_id_sequence DEFAULT VALUES').lastrowid
+                cur=c.execute('INSERT OR IGNORE INTO tasks(id,title,deadline,responsible_id,channel_id,format_id,status,frequency,slot) VALUES(?,?,?,?,?,?,?,?,?)',
+                    (task_id,f"{f['name']} · {n+1}",str(day),f['responsible_id'],ids[0] if ids else None,f['id'],'Pendente',f['frequency'],slot))
                 if cur.rowcount: set_channels(c,'task',cur.lastrowid,ids)
             day+=timedelta(days=1)
 
@@ -432,7 +479,9 @@ def create_task():
             previous=c.execute('SELECT * FROM task_requests WHERE user_id=? AND request_id=?',(session['uid'],request_id)).fetchone()
             if previous:
                 if previous['payload_hash']!=payload_hash: abort(409,'Esta solicitação já foi salva. Feche o formulário e confira as tarefas antes de criar outra.')
-                return {'ids':json.loads(previous['task_ids']),'replayed':True},200
+                previous_ids=json.loads(previous['task_ids'])
+                if any(not c.execute('SELECT id FROM tasks WHERE id=?',(tid,)).fetchone() for tid in previous_ids): abort(410,'As tarefas desta solicitação foram excluídas. Abra um novo formulário se quiser criar outras.')
+                return {'ids':previous_ids,'replayed':True},200
         ids_channels=channel_ids(c,d); fields=task_fields(c,d); batch=secrets.token_hex(12); day=date.fromisoformat(fields['deadline']); deadlines=[]
         if freq:
             while len(deadlines)<count:
@@ -442,7 +491,8 @@ def create_task():
         ids=[]
         for i,deadline in enumerate(deadlines):
             f={**fields,'deadline':deadline,'title':fields['title']+(f' · {i+1}' if count>1 else '')}
-            cur=c.execute('INSERT INTO tasks(title,description,deadline,responsible_id,channel_id,format_id,status,frequency,batch) VALUES(:title,:description,:deadline,:responsible_id,:channel_id,:format_id,:status,:frequency,:batch)',{**f,'frequency':json.dumps(freq),'batch':batch})
+            task_id=c.execute('INSERT INTO task_id_sequence DEFAULT VALUES').lastrowid
+            cur=c.execute('INSERT INTO tasks(id,title,description,deadline,responsible_id,channel_id,format_id,status,frequency,batch) VALUES(:id,:title,:description,:deadline,:responsible_id,:channel_id,:format_id,:status,:frequency,:batch)',{**f,'id':task_id,'frequency':json.dumps(freq),'batch':batch})
             set_channels(c,'task',cur.lastrowid,ids_channels)
             if f['status'] in DONE: c.execute('UPDATE tasks SET completed_at=? WHERE id=?',(now(),cur.lastrowid))
             ids.append(cur.lastrowid)
@@ -450,10 +500,10 @@ def create_task():
             c.execute('INSERT INTO task_requests VALUES(?,?,?,?)',(session['uid'],request_id,payload_hash,json.dumps(ids)))
     return {'ids':ids},201
 
-def task_fields(c,d):
+def task_fields(c,d,allowed_deleted=()):
     status=d.get('status','Pendente')
     if status not in STATES: abort(400,'Status inválido.')
-    ids=channel_ids(c,d); channel=ids[0] if ids else None; fmt=ref(c,'formats',d.get('format_id'))
+    ids=channel_ids(c,d,allowed_deleted=allowed_deleted); channel=ids[0] if ids else None; fmt=ref(c,'formats',d.get('format_id'))
     return dict(title=text(d,'title'),description=text(d,'description',20000,False),deadline=iso(d['deadline']),
         responsible_id=ref(c,'users',d.get('responsible_id')),channel_id=channel,format_id=fmt,status=status)
 
@@ -468,14 +518,47 @@ def update_task(id):
         if d.get('version')!=old['version']: abort(409,'Esta tarefa foi atualizada por outra pessoa. Feche e abra novamente para carregar a versão atual.')
         merged={**dict(old),'channel_ids':linked_channels(c,'task',id),**d}
         if 'channel_id' in d and 'channel_ids' not in d: merged.pop('channel_ids',None)
-        ids_channels=channel_ids(c,merged)
-        f=task_fields(c,merged); freq=frequency(d.get('frequency',json.loads(old['frequency'])))
+        existing_channels=linked_channels(c,'task',id)
+        ids_channels=channel_ids(c,merged,allowed_deleted=existing_channels)
+        f=task_fields(c,merged,allowed_deleted=existing_channels); freq=frequency(d.get('frequency',json.loads(old['frequency'])))
         changed=c.execute('UPDATE tasks SET title=:title,description=:description,deadline=:deadline,responsible_id=:responsible_id,channel_id=:channel_id,format_id=:format_id,status=:status,frequency=:frequency,version=version+1 WHERE id=:id AND version=:version', {**f,'frequency':json.dumps(freq),'id':id,'version':old['version']}).rowcount
         if not changed: abort(409,'Esta tarefa foi atualizada por outra pessoa. Reabra a tarefa.')
         set_channels(c,'task',id,ids_channels)
         completed=(old['completed_at'] if old['status'] in DONE else now()) if f['status'] in DONE else None
         c.execute('UPDATE tasks SET completed_at=? WHERE id=?',(completed,id))
     return {'ok':True}
+
+def remove_tasks(ids):
+    if not isinstance(ids,list) or not ids or len(ids)>500 or any(type(id) is not int or id<=0 for id in ids):
+        abort(400,'Selecione entre 1 e 500 tarefas válidas.')
+    ids=sorted(set(ids));marks=','.join('?' for _ in ids)
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        rows=c.execute(f'SELECT id,slot,format_id FROM tasks WHERE id IN ({marks})',ids).fetchall()
+        if len(rows)!=len(ids): abort(409,'Uma das tarefas não existe mais. Atualize a lista antes de excluir.')
+        for row in rows:
+            if row['slot'] and row['format_id']:
+                c.execute('INSERT OR IGNORE INTO suppressed_slots VALUES(?,?)',(row['slot'],row['format_id']))
+        disks=[r[0] for r in c.execute(f'SELECT disk FROM attachments WHERE task_id IN ({marks})',ids)]
+        c.execute(f'DELETE FROM attachments WHERE task_id IN ({marks})',ids)
+        c.execute(f'DELETE FROM tasks WHERE id IN ({marks})',ids)
+    for disk in disks:
+        try: (DATA/'uploads'/disk).unlink(missing_ok=True)
+        except OSError: app.logger.warning('Não foi possível remover um arquivo de anexo excluído.')
+    return {'ok':True,'deleted':len(ids)}
+
+
+@app.delete('/api/tasks/<int:id>')
+@auth()
+def delete_task(id):
+    return remove_tasks([id])
+
+
+@app.post('/api/tasks/bulk-delete')
+@auth()
+def bulk_delete_tasks():
+    return remove_tasks(request.get_json().get('ids'))
+
 
 @app.post('/api/tasks/<int:id>/attachments')
 @auth()

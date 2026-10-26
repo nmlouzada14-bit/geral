@@ -127,3 +127,9 @@ O roteiro testa o primeiro acesso, cadastro da equipe, canais/formatos, geraçã
 O roteiro `tests/browser_upgrade.py` testa Insights, PDF por intervalo, múltiplos canais, arquivamento, cores herdadas, tags no calendário, comentários e menções entre sessões. Requer uma instância isolada e vazia na porta 8004 (ou `TEST_URL`).
 
 O roteiro `tests/browser_formats.py` valida uma tarefa em dois canais, simula perda de resposta após criação (retry sem duplicação), e testa cancelamento/exclusão de formato com preservação das entregas. Use uma instância isolada vazia na porta 8006, ou `TEST_URL`.
+
+Canais podem ser editados ou excluídos na Linha editorial. A exclusão retira o canal das opções para novos conteúdos e dos formatos, mantendo os vínculos históricos das tarefas. Formatos que perdem todos os canais são pausados; edite e escolha outro canal antes de retomá-los.
+
+Tarefas podem ser excluídas pelo modal de detalhes ou pelas caixas de seleção na visualização Lista (até 500 por operação, inclusive arquivadas). A confirmação mostra os itens selecionados. A exclusão é permanente e remove comentários, menções e anexos. Uma ocorrência automática excluída não é recriada pela recorrência; as próximas ocorrências continuam sendo geradas. IDs de tarefas excluídas não são reutilizados.
+
+O roteiro `tests/browser_deletion.py` valida edição/exclusão de canais e exclusão individual/em lote com cancelamento. Requer uma instância isolada vazia na porta 8007 (ou `TEST_URL`). Os testes de API também verificam preservação de histórico, pausa de formatos sem canal, limpeza dos anexos, atomicidade do lote e supressão de recorrências após reinicialização.

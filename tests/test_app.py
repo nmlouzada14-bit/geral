@@ -36,6 +36,66 @@ class Workflow(unittest.TestCase):
     def task(self,**extra):
         return self.call('post','/tasks',{'title':'Entrega','deadline':str(m.today()),'description':'Briefing https://example.com','status':'Pendente','quantity':1,**extra},201)['ids']
 
+    def test_channel_edit_delete_preserves_history_and_pauses_orphans(self):
+        ch=self.channel()
+        self.call('post','/channels',{'name':'YouTube','url':'https://youtube.com/test','color':'#123456'},201)
+        ch2=self.state()['channels'][-1]['id']
+        base={'name':'Formato','responsible_id':1,'frequency':{str(m.today().weekday()):1},'active_from':str(m.today())}
+        for ids in [[ch],[ch,ch2]]:
+            self.call('post','/formats',{**base,'channel_ids':ids},201)
+        state=self.state();tid=state['tasks'][0]['id']
+        self.call('patch',f'/channels/{ch}',{'name':'Instagram editado','url':'https://example.com','color':'#abcdef'})
+        self.assertTrue(all(f['color']=='#abcdef' for f in self.state()['formats']))
+        result=self.call('delete',f'/channels/{ch}')
+        self.assertEqual(result['paused_formats'],1)
+        state=self.state();orphan=next(f for f in state['formats'] if not f['channel_ids'])
+        self.assertFalse(orphan['active'])
+        self.call('patch',f"/formats/{orphan['id']}",{'active':True},400)
+        t=self.call('get',f'/tasks/{tid}')
+        self.assertIn(ch,t['channel_ids'])
+        self.call('patch',f'/tasks/{tid}',{'status':'Finalizado','version':t['version']})
+        self.call('post','/tasks',{'title':'Invalid','deadline':str(m.today()),'channel_ids':[ch]},400)
+        self.call('delete',f'/channels/{ch}',expected=404)
+        later=m.today()+timedelta(days=7)
+        new=self.call('get',f'/state?start={later}&end={later}')['tasks']
+        self.assertEqual(len(new),1);self.assertEqual(new[0]['channel_ids'],[ch2])
+
+    def test_task_delete_bulk_atomic_cleanup_and_idempotency(self):
+        payload={'request_id':'delete-request-123456','quantity':2}
+        ids=self.task(**payload)
+        self.call('post',f'/tasks/{ids[0]}/comments',{'body':'Comentário'},201)
+        r=self.client.post(f'/api/tasks/{ids[0]}/attachments',data={'file':(io.BytesIO(b'attachment'),'note.txt')},headers={'X-ContentOS':'1'})
+        self.assertEqual(r.status_code,201)
+        with m.db() as c: disk=c.execute('SELECT disk FROM attachments WHERE task_id=?',(ids[0],)).fetchone()[0]
+        self.assertTrue((m.DATA/'uploads'/disk).exists())
+        self.call('delete',f'/tasks/{ids[0]}',expected=401,client=m.app.test_client())
+        for invalid in [[],[True],[-1],list(range(1,502))]:
+            self.call('post','/tasks/bulk-delete',{'ids':invalid},400)
+        self.call('post','/tasks/bulk-delete',{'ids':[ids[0],9999999]},409)
+        self.assertEqual(len(self.state()['tasks']),2)
+        result=self.call('post','/tasks/bulk-delete',{'ids':ids})
+        self.assertEqual(result['deleted'],2)
+        self.assertFalse((m.DATA/'uploads'/disk).exists())
+        with m.db() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM comments').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_channels').fetchone()[0],0)
+        replacement=self.task()[0];self.assertGreater(replacement,max(ids))
+        self.call('post','/tasks',{'title':'Entrega','deadline':str(m.today()),'description':'Briefing https://example.com','status':'Pendente',**payload},410)
+        self.call('delete',f'/tasks/{replacement}')
+        self.assertEqual(self.state()['tasks'],[])
+
+    def test_deleted_recurring_task_stays_deleted_after_restart(self):
+        ch=self.channel()
+        self.call('post','/formats',{'name':'Reels','channel_ids':[ch],'responsible_id':1,'frequency':{str(m.today().weekday()):2},'active_from':str(m.today())},201)
+        state=self.state();tid=state['tasks'][0]['id'];fid=state['formats'][0]['id']
+        self.call('delete',f'/tasks/{tid}')
+        m.init()
+        self.assertEqual(len(self.state()['tasks']),1)
+        later=m.today()+timedelta(days=7)
+        self.assertEqual(len(self.call('get',f'/state?start={later}&end={later}')['tasks']),2)
+        self.call('delete',f'/formats/{fid}')
+        with m.db() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM suppressed_slots').fetchone()[0],0)
+
     def test_auth_and_admin_enforced_server_side(self):
         other=m.app.test_client()
         self.call('get','/state',expected=401,client=other)

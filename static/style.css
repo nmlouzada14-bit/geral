@@ -1571,3 +1571,7 @@ dialog::backdrop {
 .insight-stats .stat:last-child .stat-num{color:var(--blue)}
 
 button.danger{color:#b83d4b;border-color:#efced2;background:#fff6f7}button.danger:hover{background:#ffe9ec}.task-origin{display:block;white-space:nowrap;font-size:9px;margin-left:auto}
+
+.channel-actions { display:flex; gap:8px; margin-top:16px; }
+[data-select-task], [data-select-table] { width:18px; height:18px; cursor:pointer; }
+.delete-preview { max-height:180px; overflow:auto; }
