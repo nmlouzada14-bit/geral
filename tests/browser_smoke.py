@@ -70,7 +70,7 @@ with sync_playwright() as p:
     page.get_by_role('button',name='Semana',exact=True).click()
     page.screenshot(path=str(OUT/'calendar.png'),full_page=True)
     page.locator('.nav [data-page=dashboard]').click()
-    expect(page.locator('.stat')).to_have_count(7)
+    expect(page.locator('.stat')).to_have_count(6)
     page.screenshot(path=str(OUT/'dashboard.png'),full_page=True)
     page.locator('.nav [data-page=tasks]').click()
     page.get_by_role('button',name='Lista',exact=False).click()

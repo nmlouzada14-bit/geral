@@ -1,11 +1,11 @@
 """Production metrics: one content item per task, scoped by its deadline."""
 from collections import Counter
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-DONE = ('Finalizado', 'Agendado', 'Postado')
+DONE = ('Criado', 'Postado')
 
 
 def summarize(tasks, users, channels, start, end):
@@ -18,9 +18,16 @@ def summarize(tasks, users, channels, start, end):
         return dict(name=name,planned=n,delivered=done,pending=n-done,posted=sum(t['status']=='Postado' for t in items),overdue=sum(t['overdue'] or t['status']=='Atrasado' for t in items),rate=round(done/n*100,1) if n else 0)
     people=[row(u['name'],[t for t in tasks if u['id'] in t['responsible_ids']]) for u in users]
     people.append(row('Sem responsável',[t for t in tasks if not t['responsible_ids']]))
+    daily=[]
+    step=7 if (end-start).days>=14 else 1
+    day=start
+    while day<=end:
+        last=min(day+timedelta(days=step-1),end)
+        daily.append({**row(day.strftime('%d/%m')+(('–'+last.strftime('%d/%m')) if step>1 else ''),[t for t in tasks if str(day)<=t['deadline']<=str(last)]),'start':str(day),'end':str(last)})
+        day=last+timedelta(days=1)
     distribution=[row(c['name'],[t for t in tasks if c['id'] in t['channel_ids']]) for c in channels]
     return dict(start=str(start),end=str(end),**row('Total',tasks),statuses=dict(statuses),
-        on_time=on_time,late_delivery=len(dated)-on_time,undated_delivery=len(delivered)-len(dated),
+        daily=daily,on_time=on_time,late_delivery=len(dated)-on_time,undated_delivery=len(delivered)-len(dated),
         on_time_rate=round(on_time/len(dated)*100,1) if dated else None,
         people=[p for p in people if p['planned']],channels=[ch for ch in distribution if ch['planned']])
 
@@ -53,7 +60,7 @@ def make_pdf(report,tasks,users,channels,generated):
         story.extend([t,Spacer(1,16)])
     def display(s):return date.fromisoformat(s).strftime('%d/%m/%Y')
     story.extend([paragraph('ContentOS · Insights','Title'),paragraph(f"Período: {display(report['start'])} a {display(report['end'])}"),paragraph('Gerado em '+datetime.fromisoformat(generated).strftime('%d/%m/%Y %H:%M')+' · São Paulo'),Spacer(1,16)])
-    story.extend([paragraph('Resumo da produção','Heading2'),paragraph('Filtro pela deadline. Cada conteúdo conta uma vez, independentemente do número de canais. Entregues = Finalizado + Agendado + Postado. O relatório mostra o estado atual desse conjunto de tarefas.'),Spacer(1,10)])
+    story.extend([paragraph('Resumo da produção','Heading2'),paragraph('Filtro pela deadline. Cada conteúdo conta uma vez, independentemente do número de canais. Entregues = Criado + Postado. O relatório mostra o estado atual desse conjunto de tarefas.'),Spacer(1,10)])
     table(['Planejadas','Entregues','Em aberto','Postadas','Atrasadas','Conclusão'],[[report[k] for k in ['planned','delivered','pending','posted','overdue']]+[str(report['rate'])+'%']],[89,89,89,89,89,86])
     story.append(paragraph('Planejadas x entregues','Heading2'))
     from reportlab.graphics.shapes import Drawing,Rect,String
@@ -64,21 +71,31 @@ def make_pdf(report,tasks,users,channels,generated):
         chart.add(Rect(100,y,350*value/maximum,22,fillColor=colors.HexColor(fill),strokeColor=None))
         chart.add(String(460,y+6,str(value),fontName='ContentOS',fontSize=10))
     story.extend([chart,Spacer(1,12)])
-    story.append(paragraph('Etapas e prazos','Heading2'))
-    table(['Etapa','Quantidade'],list(report['statuses'].items()) or [['Sem tarefas',0]],[370,161])
-    story.append(paragraph(f"Entregues no prazo: {report['on_time']}. Entregues após o prazo: {report['late_delivery']}. Sem data histórica de conclusão: {report['undated_delivery']}. Datas de conclusão só estão disponíveis para transições registradas a partir desta versão; não estimamos datas antigas."))
+    def bars(title, rows, paired=False):
+        story.extend([Spacer(1,12),paragraph(title,'Heading2')])
+        if not rows:
+            story.append(paragraph('Sem demandas no período.'))
+            return
+        maximum=max([v for _,a,b in rows for v in (a,b)]+[1])
+        if paired: story.append(paragraph('Azul claro: planejadas · Azul: entregues (Criado + Postado).'))
+        for offset in range(0,len(rows),10):
+            chunk=rows[offset:offset+10];drawing=Drawing(530,len(chunk)*45+8)
+            for index,(label,a,b) in enumerate(chunk):
+                y=(len(chunk)-index-1)*45+8
+                drawing.add(String(0,y+20,label[:30]+('…' if len(label)>30 else ''),fontName='ContentOS',fontSize=8))
+                drawing.add(Rect(180,y+14,285*a/maximum,12,fillColor=colors.HexColor('#b6cff8' if paired else '#3b82f6'),strokeColor=None))
+                drawing.add(String(480,y+16,str(a),fontName='ContentOS',fontSize=9))
+                if paired:
+                    drawing.add(Rect(180,y,285*b/maximum,10,fillColor=colors.HexColor('#3b82f6'),strokeColor=None))
+                    drawing.add(String(480,y+1,str(b),fontName='ContentOS',fontSize=9))
+            story.append(drawing)
+    bars('Distribuição por status',[(name,n,0) for name,n in report['statuses'].items()])
+    bars('Produção por deadline',[(r['name'],r['planned'],r['delivered']) for r in report['daily']],True)
+    bars('Prazos das entregas',[('No prazo',report['on_time'],0),('Após o prazo',report['late_delivery'],0),('Sem data histórica',report['undated_delivery'],0)])
+    story.append(paragraph('Datas de conclusão ausentes não são estimadas. A produção por dia/semana agrupa pela deadline, não pela data da conclusão.'))
     for key,title in [('people','Demandas por pessoa'),('channels','Distribuição por canal')]:
-        story.extend([Spacer(1,12),paragraph(title,'Heading2')])
-        if key=='people':story.append(paragraph('Uma tarefa compartilhada aparece para cada responsável. O total geral conta cada conteúdo uma única vez.'))
-        if key=='channels':story.append(paragraph('Um conteúdo com vários canais aparece em cada canal. A soma por canal pode ultrapassar o total de conteúdos.'))
-        table(['Pessoa' if key=='people' else 'Canal','Planejadas','Entregues','Em aberto','Atrasadas'],[[r['name'],r['planned'],r['delivered'],r['pending'],r['overdue']] for r in report[key]] or [['Sem demandas',0,0,0,0]],[211,80,80,80,80])
-    names={u['id']:u['name'] for u in users};channel_names={c['id']:c['name'] for c in channels}
-    for delivered,title in [(True,'Entregas concluídas'),(False,'Demandas em aberto')]:
-        story.extend([Spacer(1,12),paragraph(title,'Heading2')])
-        items=[t for t in tasks if (t['status'] in DONE)==delivered]
-        rows=[[f"#{t['id']} · {t['title']}",display(t['deadline']),'\n'.join(names[uid] for uid in t['responsible_ids']) or 'Sem responsável','\n'.join(channel_names[x] for x in t['channel_ids']),t['status']] for t in items]
-        if rows:table(['Conteúdo','Deadline','Responsável','Canais','Status'],rows,[175,67,92,107,90])
-        else:story.append(paragraph('Nenhuma demanda neste grupo.'))
+        bars(title,[(r['name'],r['planned'],r['delivered']) for r in report[key]],True)
+        story.append(paragraph('Conteúdos compartilhados aparecem em cada pessoa/canal associado. O total geral conta cada conteúdo uma vez.'))
     story.extend([Spacer(1,12),paragraph('Métricas sociais: visualizações, alcance e engajamento não estão incluídos. As contas das redes sociais ainda não foram conectadas às APIs oficiais.')])
     def footer(canvas,doc):
         canvas.setFont('ContentOS',8);canvas.setFillColor(colors.HexColor('#78869b'))

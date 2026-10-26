@@ -72,8 +72,8 @@ A CLI de conexão/deploy utilizada não expõe configuração de variáveis e vo
 
 - Semana de segunda a domingo; deadlines sem horário, com atraso calculado pela data de São Paulo.
 - Filtro por semana atual, anterior, próxima ou intervalo personalizado de até 93 dias.
-- Status: Pendente, Em andamento, Revisão, Finalizado, Agendado, Postado e Atrasado.
-- Atraso também é um alerta derivado da deadline, sem substituir o status de produção. Finalizado, Agendado e Postado ficam fora do alerta. O cartão de atrasados pode se sobrepor aos demais.
+- Status: Pendente, Em andamento, Revisão, Criado, Postado e Atrasado.
+- A partir do dia seguinte à deadline (São Paulo), tarefas que não estão em Criado ou Postado mudam para Atrasado. A atualização é persistida nas requisições autenticadas, inclusive no refresh automático da interface; não depende de alguém editar a tarefa. Tarefas criadas para datas passadas já recebem Atrasado. A versão é incrementada para proteger formulários antigos.
 - Formatos repetem a frequência semanal a partir da data de início. Ao abrir um período são geradas e persistidas as entregas faltantes, sem duplicar as existentes. Não há scheduler externo necessário para visualizar o calendário.
 - Formatos e lotes são agrupados visualmente por semana na lista; cada entrega é uma tarefa independente, não uma entidade pai que soma duas vezes no dashboard.
 - Pausar um formato interrompe a geração de novas entregas. Não apaga as já existentes.
@@ -82,7 +82,7 @@ A CLI de conexão/deploy utilizada não expõe configuração de variáveis e vo
 - Atualizações de outros navegadores são buscadas a cada 20 segundos quando a tela está ativa, sem interromper formulários abertos. Conflitos de edição pedem recarregamento, sem sobrescrever silenciosamente.
 - Anexos autenticados, até 20 MB por envio; downloads não executam HTML no domínio do app.
 - A aba de equipe e o cadastro de usuários são restritos ao e-mail administrador também na API. Não há cadastro público.
-- A publicação nas redes sociais é feita pela equipe; marcar Agendado/Postado não envia conteúdo às plataformas.
+- A publicação nas redes sociais é feita pela equipe; marcar Postado não envia conteúdo às plataformas.
 
 ## Atualização: Insights, múltiplos canais e colaboração
 
@@ -93,10 +93,10 @@ No EasyPanel, use **Implantar** no serviço existente para buscar a nova versão
 - **Excluir formato:** remove o formato e interrompe novas gerações; preserva as tarefas existentes, seus canais, comentários e anexos. As tarefas ficam avulsas. A interface pede confirmação e permite cancelar.
 - **Criação sem duplicação por reenvio:** uma solicitação de criação recebe um identificador único por formulário. Reenvios idênticos recuperam os mesmos IDs; pedidos simultâneos são serializados. Alterar um pedido que já foi salvo exige reabrir o formulário. A quantidade é o total de conteúdos, não o número de canais.
 - **Editar formato:** campos compartilhados alterados (responsáveis, canais e frequência) são sincronizados com todas as tarefas vinculadas, inclusive finalizadas e fora do período visível. Renomear o formato atualiza títulos automáticos, preservando títulos personalizados. Status, prazos, comentários, anexos e datas de conclusão são mantidos. A nova agenda vale para slots futuros ainda não gerados; não reprograma nem remove entregas existentes. Campos não alterados no formato preservam ajustes individuais das tarefas. A versão das tarefas sincronizadas é incrementada para impedir que um formulário antigo sobrescreva a atualização.
-- **Finalizadas/arquivadas:** seção recolhível abaixo da lista, para Finalizado, Agendado e Postado. Continua respeitando período, busca e responsável. Não apaga dados. Alterar uma tarefa para uma etapa de produção a devolve à lista ativa. O Kanban e o calendário mantêm todas as etapas.
-- **Insights:** métricas e PDF usam o intervalo de deadlines selecionado e o estado atual das tarefas. Planejadas = conteúdos únicos; entregues = Finalizado + Agendado + Postado; em aberto = planejadas menos entregues. São indicadores de produção, não de performance social. Distribuições por canal podem somar mais do que o total, porque um conteúdo pode ter vários canais.
-- **Prazos:** a data de conclusão passa a ser registrada ao entrar em uma etapa entregue. Mudanças entre Finalizado/Agendado/Postado preservam essa data. Reabrir limpa a data do ciclo atual. Conclusões antigas sem data ficam separadas da taxa de pontualidade.
-- **PDF:** gerado no servidor autenticado com resumo, gráfico planejadas x entregues, etapas, prazos, pessoas, canais, títulos de todas as entregas concluídas e demandas em aberto. Geração via `/api/insights.pdf?start=YYYY-MM-DD&end=YYYY-MM-DD`; sem serviços externos.
+- **Criadas/arquivadas:** seção recolhível abaixo da lista, para Criado e Postado. Continua respeitando período, busca e responsável. Não apaga dados. Alterar uma tarefa para uma etapa de produção a devolve à lista ativa. O Kanban e o calendário mantêm todas as etapas.
+- **Insights:** métricas e PDF usam o intervalo de deadlines selecionado e o estado atual das tarefas. Planejadas = conteúdos únicos; entregues = Criado + Postado; em aberto = planejadas menos entregues. São indicadores de produção, não de performance social. Distribuições por canal podem somar mais do que o total, porque um conteúdo pode ter vários canais.
+- **Prazos:** a data de conclusão passa a ser registrada ao entrar em uma etapa entregue. Mudanças entre Criado/Postado preservam essa data. Reabrir limpa a data do ciclo atual. Conclusões antigas sem data ficam separadas da taxa de pontualidade.
+- **PDF:** gerado no servidor autenticado com números e gráficos de planejadas x entregues, status, produção por deadline, prazos, pessoas e canais. Não inclui títulos ou listagem de tarefas. Intervalos de até 14 dias usam dias individuais; os maiores usam blocos de sete dias a partir da data inicial. Geração via `/api/insights.pdf?start=YYYY-MM-DD&end=YYYY-MM-DD`; sem serviços externos.
 - **Comentários:** salvos separadamente dos campos da tarefa. Digitar `@` ou escolher uma pessoa insere a menção. O destinatário vê um aviso em **Menções**, inclusive para tarefas fora do período atual. Abrir os comentários marca as menções dessa tarefa como lidas apenas para o usuário atual. Não envia e-mails, WhatsApp ou notificações externas.
 - **Métricas sociais:** Instagram, YouTube e TikTok ainda não estão conectados. Uma integração futura requer apps e permissões oficiais, autorização das contas e associação dos posts aos conteúdos. Não existe coleta automática de visualizações nesta versão.
 
@@ -138,3 +138,8 @@ O roteiro `tests/browser_deletion.py` valida edição/exclusão de canais e excl
 - **Migração v3:** converte responsáveis únicos existentes em vínculos de equipe, preservando os campos legados para compatibilidade. Cria backup `DATA_DIR/backups/before-v3.sqlite` antes de atualizar bancos v2. A migração acontece uma única vez e não restaura responsáveis removidos depois.
 
 `tests/browser_responsibles.py` valida sincronização de formato, seleção de várias pessoas, filtros e PDF em uma instância isolada vazia na porta 8008 (ou `TEST_URL`).
+
+- **Migração v4:** converte Finalizado → Criado e Agendado → Postado, preservando IDs, vínculos e datas de conclusão. Antes de atualizar um banco v3, salva `DATA_DIR/backups/before-v4.sqlite`. Status antigos deixam de ser aceitos em novas edições.
+- **Insights visuais:** gráficos de distribuição por status, planejadas x entregues, produção por deadline, prazos, pessoas e canais. Tela e PDF exibem agregados, sem detalhamento de tarefas. A série por deadline representa o estado atual das entregas daquele dia/semana, não uma série histórica de conclusões.
+
+`tests/browser_insights.py` verifica estado vazio, gráficos, exportação PDF, nomes de status e layout mobile em instância isolada vazia na porta 8009 (ou `TEST_URL`).

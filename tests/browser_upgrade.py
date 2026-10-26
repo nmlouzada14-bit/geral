@@ -42,7 +42,7 @@ with sync_playwright() as pw:
     nav('tasks');expect(page.locator('tr[data-task]')).to_have_count(7)
     expect(page.locator('tr[data-task]').first.locator('.channel-tag')).to_have_count(2)
     row=page.locator('tr[data-task]').first;tid=row.get_attribute('data-task');row.click()
-    page.get_by_label('Status',exact=True).select_option('Finalizado')
+    page.get_by_label('Status',exact=True).select_option('Criado')
     page.get_by_role('button',name='Salvar alterações').click()
     expect(page.locator('#modal')).not_to_be_visible()
     archive=page.locator('#archive-box');expect(archive).not_to_have_attribute('open','')

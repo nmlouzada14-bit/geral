@@ -25,8 +25,8 @@ app.config.update(SECRET_KEY=secret_file.read_text(), MAX_CONTENT_LENGTH=20*1024
     SESSION_COOKIE_SECURE=os.environ.get('COOKIE_SECURE') == '1',
     PERMANENT_SESSION_LIFETIME=timedelta(hours=12))
 ADMIN = 'nmlouzada14@gmail.com'
-DONE = ('Finalizado', 'Agendado', 'Postado')
-STATES = ['Pendente', 'Em andamento', 'Revisão', 'Finalizado', 'Agendado', 'Postado', 'Atrasado']
+DONE = ('Criado', 'Postado')
+STATES = ['Pendente', 'Em andamento', 'Revisão', 'Criado', 'Postado', 'Atrasado']
 
 def db():
     c = sqlite3.connect(DATA / 'contentos.sqlite', timeout=30)
@@ -42,8 +42,8 @@ def init():
     with db() as source:
         old = source.execute("SELECT 1 FROM sqlite_master WHERE name='tasks'").fetchone()
         version = source.execute('PRAGMA user_version').fetchone()[0]
-        if old and version < 3:
-            backup = DATA / 'backups' / ('before-v2.sqlite' if version < 2 else 'before-v3.sqlite')
+        if old and version < 4:
+            backup = DATA / 'backups' / ('before-v2.sqlite' if version < 2 else 'before-v3.sqlite' if version < 3 else 'before-v4.sqlite')
             backup.parent.mkdir(exist_ok=True)
             if not backup.exists():
                 with sqlite3.connect(backup) as target:
@@ -84,6 +84,9 @@ def init():
                 c.execute(f'CREATE TABLE {kind}_responsibles({kind}_id INTEGER NOT NULL REFERENCES {table}(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id), PRIMARY KEY({kind}_id,user_id))')
                 c.execute(f'INSERT INTO {kind}_responsibles SELECT id,responsible_id FROM {table} WHERE responsible_id IS NOT NULL')
             c.execute('PRAGMA user_version=3')
+        if c.execute('PRAGMA user_version').fetchone()[0] < 4:
+            c.execute("UPDATE tasks SET status=CASE status WHEN 'Finalizado' THEN 'Criado' ELSE 'Postado' END,version=version+1 WHERE status IN ('Finalizado','Agendado')")
+            c.execute('PRAGMA user_version=4')
         if not c.execute('SELECT id FROM users WHERE email=?', (ADMIN,)).fetchone():
             pw = os.environ.get('INITIAL_PASSWORD')
             if not pw or len(pw) < 7:
@@ -102,6 +105,8 @@ def auth(admin=False):
             if u['must_change'] and request.path not in ['/api/me','/api/password','/api/logout']:
                 abort(403, 'Troque a senha inicial para continuar.')
             if admin and u['email'] != ADMIN: abort(403, 'Apenas o administrador pode gerenciar a equipe.')
+            with db() as c:
+                c.execute("UPDATE tasks SET status='Atrasado',version=version+1 WHERE deadline<? AND status NOT IN ('Criado','Postado','Atrasado')",(str(today()),))
             return fn(*args, **kwargs)
         return wrapped
     return decorator
@@ -387,7 +392,7 @@ def generate(c,start,end):
                 if slot in suppressed or c.execute('SELECT id FROM tasks WHERE slot=?',(slot,)).fetchone(): continue
                 task_id=c.execute('INSERT INTO task_id_sequence DEFAULT VALUES').lastrowid
                 cur=c.execute('INSERT OR IGNORE INTO tasks(id,title,deadline,responsible_id,channel_id,format_id,status,frequency,slot) VALUES(?,?,?,?,?,?,?,?,?)',
-                    (task_id,f"{f['name']} · {n+1}",str(day),f['responsible_id'],ids[0] if ids else None,f['id'],'Pendente',f['frequency'],slot))
+                    (task_id,f"{f['name']} · {n+1}",str(day),f['responsible_id'],ids[0] if ids else None,f['id'],'Atrasado' if day<today() else 'Pendente',f['frequency'],slot))
                 if cur.rowcount:
                     set_channels(c,'task',cur.lastrowid,ids)
                     set_responsibles(c,'task',cur.lastrowid,linked_responsibles(c,'format',f['id']))
@@ -538,7 +543,7 @@ def create_task():
         else: deadlines=[str(day)]*count
         ids=[]
         for i,deadline in enumerate(deadlines):
-            f={**fields,'deadline':deadline,'title':fields['title']+(f' · {i+1}' if count>1 else '')}
+            f={**fields,'deadline':deadline,'status':('Atrasado' if deadline<str(today()) and d.get('status','Pendente') not in DONE else d.get('status','Pendente')),'title':fields['title']+(f' · {i+1}' if count>1 else '')}
             task_id=c.execute('INSERT INTO task_id_sequence DEFAULT VALUES').lastrowid
             cur=c.execute('INSERT INTO tasks(id,title,description,deadline,responsible_id,channel_id,format_id,status,frequency,batch) VALUES(:id,:title,:description,:deadline,:responsible_id,:channel_id,:format_id,:status,:frequency,:batch)',{**f,'id':task_id,'frequency':json.dumps(freq),'batch':batch})
             set_channels(c,'task',cur.lastrowid,ids_channels)
@@ -553,6 +558,7 @@ def task_fields(c,d,allowed_deleted=()):
     status=d.get('status','Pendente')
     if status not in STATES: abort(400,'Status inválido.')
     ids=channel_ids(c,d,allowed_deleted=allowed_deleted); channel=ids[0] if ids else None; fmt=ref(c,'formats',d.get('format_id'))
+    if iso(d['deadline'])<str(today()) and status not in DONE: status='Atrasado'
     return dict(title=text(d,'title'),description=text(d,'description',20000,False),deadline=iso(d['deadline']),
         responsible_id=next(iter(responsible_ids(c,d)),None),channel_id=channel,format_id=fmt,status=status)
 

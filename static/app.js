@@ -11,7 +11,7 @@ const esc = (v) =>
   );
 const selectedTasks = new Set();
 const activeChannels = () => data.channels.filter(c => !c.deleted);
-const doneStates = ["Finalizado", "Agendado", "Postado"];
+const doneStates = ["Criado", "Postado"];
 const isDelivered = (t) => doneStates.includes(t.status);
 let insightReport = null,
   archiveOpen = false;
@@ -19,8 +19,7 @@ const states = [
   "Pendente",
   "Em andamento",
   "Revisão",
-  "Finalizado",
-  "Agendado",
+  "Criado",
   "Postado",
   "Atrasado",
 ];
@@ -29,7 +28,6 @@ const colors = [
   "#3b82f6",
   "#a78bfa",
   "#34b9a0",
-  "#e5aa42",
   "#6189c7",
   "#df6b77",
 ];
@@ -37,8 +35,7 @@ const labels = [
   "Pendentes",
   "Em andamento",
   "Revisão",
-  "Finalizados",
-  "Agendados",
+  "Criados",
   "Postados",
   "Atrasados",
 ];
@@ -286,7 +283,7 @@ function dashboard() {
       ).length,
   );
   const total = data.tasks.length;
-  const posted = counts[5];
+  const posted = counts[states.indexOf("Postado")];
   let dates = [];
   for (let d = start; d <= end; d = add(d, 1)) dates.push(d);
   let chartDays =
@@ -323,7 +320,7 @@ function dashboard() {
       newTask(),
     ) +
     periodControl() +
-    `<div class="cards">${counts.map((n, i) => `<button class="stat" data-status="${states[i]}"><div class="stat-top">${labels[i]}<span class="dot" style="--accent:${colors[i]}"></span></div><div class="stat-num">${n}</div><div class="stat-foot">${i === 6 ? "Precisam de atenção" : total ? Math.round((n / total) * 100) + "% das entregas" : "Nenhuma entrega ainda"}</div></button>`).join("")}</div><div class="summary-band"><span><strong>${total ? `${posted} de ${total} entregas publicadas` : "Sua semana está pronta para ser planejada."}</strong>${total ? ` &nbsp; · &nbsp; ${counts[6] ? counts[6] + " entregas precisam de atenção." : "Tudo dentro do prazo por aqui."}` : " Configure sua linha editorial para gerar as tarefas."}</span><button data-page="${total ? "tasks" : "editorial"}">${total ? "Ver produção" : "Planejar conteúdo"} →</button></div><div class="dashboard-charts"><section class="panel"><div class="panel-head"><div><h2>${dates.length <= 14 ? "Entregas por dia" : "Entregas por semana"}</h2><p>Volume de conteúdo no período selecionado</p></div><span class="badge">${total} entregas</span></div><div class="panel-body"><div class="chart">${chartDays.map((d, i) => `<div class="chart-day"><span class="value">${amounts[i]}</span><div class="bar ${d === data.today ? "today" : ""}" style="height:${Math.max((amounts[i] / max) * 120, 3)}px"></div><small>${dates.length === 7 ? days[i] : fmt(d, { day: "2-digit", month: "2-digit" })}</small></div>`).join("")}</div></div></section><section class="panel"><div class="panel-head"><div><h2>Demandas por pessoa</h2><p>Uma visão da distribuição do time</p></div><span class="muted">${icon("tasks")}</span></div><div class="panel-body">${
+    `<div class="cards">${counts.map((n, i) => `<button class="stat" data-status="${states[i]}"><div class="stat-top">${labels[i]}<span class="dot" style="--accent:${colors[i]}"></span></div><div class="stat-num">${n}</div><div class="stat-foot">${states[i] === "Atrasado" ? "Precisam de atenção" : total ? Math.round((n / total) * 100) + "% das entregas" : "Nenhuma entrega ainda"}</div></button>`).join("")}</div><div class="summary-band"><span><strong>${total ? `${posted} de ${total} entregas publicadas` : "Sua semana está pronta para ser planejada."}</strong>${total ? ` &nbsp; · &nbsp; ${counts[states.indexOf("Atrasado")] ? counts[states.indexOf("Atrasado")] + " entregas precisam de atenção." : "Tudo dentro do prazo por aqui."}` : " Configure sua linha editorial para gerar as tarefas."}</span><button data-page="${total ? "tasks" : "editorial"}">${total ? "Ver produção" : "Planejar conteúdo"} →</button></div><div class="dashboard-charts"><section class="panel"><div class="panel-head"><div><h2>${dates.length <= 14 ? "Entregas por dia" : "Entregas por semana"}</h2><p>Volume de conteúdo no período selecionado</p></div><span class="badge">${total} entregas</span></div><div class="panel-body"><div class="chart">${chartDays.map((d, i) => `<div class="chart-day"><span class="value">${amounts[i]}</span><div class="bar ${d === data.today ? "today" : ""}" style="height:${Math.max((amounts[i] / max) * 120, 3)}px"></div><small>${dates.length === 7 ? days[i] : fmt(d, { day: "2-digit", month: "2-digit" })}</small></div>`).join("")}</div></div></section><section class="panel"><div class="panel-head"><div><h2>Demandas por pessoa</h2><p>Uma visão da distribuição do time</p></div><span class="muted">${icon("tasks")}</span></div><div class="panel-body">${
       people.length
         ? people
             .slice(0, 6)
@@ -336,7 +333,7 @@ function dashboard() {
             "A equipe aparece aqui.",
             "As demandas serão distribuídas conforme os responsáveis.",
           )
-    }</div></section>${deliveryPanel()}</div><section class="panel"><div class="panel-head"><div><h2>Próximas entregas</h2><p>As prioridades para tirar do caminho</p></div><button class="ghost" data-page="tasks">Ver todas →</button></div>${table(priorities)}</section><p class="subtitle">Atrasados considera a deadline e pode incluir tarefas de outras etapas. Finalizados, agendados e postados não entram nesse alerta.</p>`
+    }</div></section>${deliveryPanel()}</div><section class="panel"><div class="panel-head"><div><h2>Próximas entregas</h2><p>As prioridades para tirar do caminho</p></div><button class="ghost" data-page="tasks">Ver todas →</button></div>${table(priorities)}</section><p class="subtitle">Após a deadline, tarefas que não estão criadas ou postadas mudam automaticamente para Atrasado. Criados e postados não entram nesse alerta.</p>`
   );
 }
 function tasksPage() {
@@ -353,7 +350,7 @@ function tasksPage() {
     periodControl() +
     `<div class="task-tools"><div class="segmented"><button data-view="list" class="${view === "list" ? "selected" : ""}">☷ Lista</button><button data-view="kanban" class="${view === "kanban" ? "selected" : ""}">▥ Kanban</button></div><div class="filters"><input id="search" aria-label="Buscar tarefas" placeholder="Buscar tarefa…" value="${esc(search)}"><select id="filter-status" aria-label="Filtrar status"><option value="">Todos os status</option>${states.map((s) => `<option ${filterStatus === s ? "selected" : ""}>${s}</option>`).join("")}</select><select id="filter-person" aria-label="Filtrar responsável"><option value="">Toda a equipe</option>${data.users.map((u) => `<option value="${u.id}" ${filterPerson === String(u.id) ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></div></div>${
       view === "list"
-        ? `<div class="toolbar"><small>${tasks.length} entregas no período</small><button class="danger" id="delete-selected" ${selectedTasks.size ? "" : "disabled"}>Excluir selecionadas (${selectedTasks.size})</button><label class="checkbox"><input id="group" type="checkbox" ${group ? "checked" : ""}>Agrupar por formato e semana</label></div><section class="panel">${active.length ? table(active, group) : empty("Nenhuma demanda em aberto neste filtro.", "As entregas concluídas ficam no quadro abaixo.")}</section><details class="archive-box panel" id="archive-box" ${archiveOpen || doneStates.includes(filterStatus) ? "open" : ""}><summary>Finalizadas / arquivadas <span class="badge">${archived.length}</span><small>Finalizados, agendados e postados · período selecionado</small></summary>${archived.length ? table(archived, group) : empty("Nenhuma entrega arquivada neste filtro.", "Ao finalizar uma tarefa, ela aparecerá aqui.")}</details>`
+        ? `<div class="toolbar"><small>${tasks.length} entregas no período</small><button class="danger" id="delete-selected" ${selectedTasks.size ? "" : "disabled"}>Excluir selecionadas (${selectedTasks.size})</button><label class="checkbox"><input id="group" type="checkbox" ${group ? "checked" : ""}>Agrupar por formato e semana</label></div><section class="panel">${active.length ? table(active, group) : empty("Nenhuma demanda em aberto neste filtro.", "As entregas concluídas ficam no quadro abaixo.")}</section><details class="archive-box panel" id="archive-box" ${archiveOpen || doneStates.includes(filterStatus) ? "open" : ""}><summary>Criadas / arquivadas <span class="badge">${archived.length}</span><small>Criados e postados · período selecionado</small></summary>${archived.length ? table(archived, group) : empty("Nenhuma entrega arquivada neste filtro.", "Ao marcar uma tarefa como Criado ou Postado, ela aparecerá aqui.")}</details>`
         : `<div class="kanban">${states
             .map((s, i) => {
               const items = tasks.filter((t) => t.status === s);
@@ -875,31 +872,25 @@ function selectedChannels() {
 function deliveryPanel() {
   const planned = data.tasks.length,
     delivered = data.tasks.filter(isDelivered).length;
-  return `<section class="panel delivery-panel"><div class="panel-head"><div><h2>Planejadas x entregues</h2><p>Conteúdos únicos no período</p></div></div><div class="panel-body"><div class="delivery-total"><strong>${planned ? Math.round((delivered / planned) * 100) : 0}%</strong><span>de conclusão</span></div><div class="comparison-row"><span>Planejadas <b>${planned}</b></span><div class="track"><div style="width:${planned ? 100 : 0}%;background:#b6cff8"></div></div></div><div class="comparison-row"><span>Entregues <b>${delivered}</b></span><div class="track"><div style="width:${planned ? (delivered / planned) * 100 : 0}%;background:#3b82f6"></div></div></div><small>Entregues = Finalizados + Agendados + Postados. Filtro pela deadline.</small></div></section>`;
+  return `<section class="panel delivery-panel"><div class="panel-head"><div><h2>Planejadas x entregues</h2><p>Conteúdos únicos no período</p></div></div><div class="panel-body"><div class="delivery-total"><strong>${planned ? Math.round((delivered / planned) * 100) : 0}%</strong><span>de conclusão</span></div><div class="comparison-row"><span>Planejadas <b>${planned}</b></span><div class="track"><div style="width:${planned ? 100 : 0}%;background:#b6cff8"></div></div></div><div class="comparison-row"><span>Entregues <b>${delivered}</b></span><div class="track"><div style="width:${planned ? (delivered / planned) * 100 : 0}%;background:#3b82f6"></div></div></div><small>Entregues = Criados + Postados. Filtro pela deadline.</small></div></section>`;
+}
+function insightBars(title, rows, paired=false, note='') {
+  const max=Math.max(1,...rows.flatMap(r=>[r.planned,r.delivered || 0]));
+  return `<section class="panel insight-chart"><div class="panel-head"><div><h2>${esc(title)}</h2><p>${esc(note)}</p></div></div><div class="panel-body">${paired ? '<p class="chart-legend"><span>■ Planejadas</span><strong>■ Entregues</strong></p>' : ''}${rows.length ? rows.map(r=>`<div class="metric-bars"><div class="metric-label">${esc(r.name)}</div><div class="metric-track"><span style="width:${100*r.planned/max}%;background:${paired?'#b6cff8':'#3b82f6'}"></span><b>${r.planned}</b></div>${paired ? `<div class="metric-track"><span style="width:${100*r.delivered/max}%"></span><b>${r.delivered}</b></div>` : ''}</div>`).join('') : '<p class="muted">Sem demandas no período.</p>'}</div></section>`;
 }
 function insightsPage() {
-  const r = insightReport;
-  if (!r) return empty("Carregando relatório…", "");
-  const metrics = [
-    ["Planejadas", r.planned],
-    ["Entregues", r.delivered],
-    ["Em aberto", r.pending],
-    ["Postadas", r.posted],
-    ["Atrasadas", r.overdue],
-    ["Conclusão", r.rate + "%"],
-  ];
-  const breakdown = (rows, first) =>
-    `<div class="table-wrap"><table><thead><tr><th>${first}</th><th>Planejadas</th><th>Entregues</th><th>Em aberto</th><th>Atrasadas</th></tr></thead><tbody>${rows.length ? rows.map((x) => `<tr><td>${esc(x.name)}</td><td>${x.planned}</td><td>${x.delivered}</td><td>${x.pending}</td><td>${x.overdue}</td></tr>`).join("") : '<tr><td colspan="5">Sem demandas neste período.</td></tr>'}</tbody></table></div>`;
-  return (
-    heading(
-      "Insights",
-      "Um relatório claro da produção, pronto para levar à reunião.",
-      '<button class="primary" data-action="export-pdf">↓ Exportar PDF</button>',
-      "RELATÓRIO DE PRODUÇÃO",
-    ) +
-    periodControl() +
-    `<div class="notice">Período filtrado pela deadline. Cada conteúdo conta uma vez, mesmo com vários canais. Entregues = Finalizados + Agendados + Postados. Os números refletem o status atual das tarefas.</div><div class="insight-stats">${metrics.map(([label, n]) => `<div class="stat"><div class="stat-top">${label}</div><div class="stat-num">${n}</div></div>`).join("")}</div><div class="grid-two">${deliveryPanel()}<section class="panel"><div class="panel-head"><h2>Prazos das entregas</h2></div><div class="panel-body"><div class="deadline-metrics"><p><strong>${r.on_time}</strong> no prazo</p><p><strong>${r.late_delivery}</strong> após o prazo</p><p><strong>${r.undated_delivery}</strong> sem data histórica</p></div><p class="subtitle">${r.on_time_rate === null ? "Sem datas de conclusão suficientes." : r.on_time_rate + "% das entregas com data registrada foram concluídas no prazo."} Entregas anteriores à atualização não recebem datas estimadas.</p></div></section></div><div class="grid-two"><section class="panel"><div class="panel-head"><div><h2>Por pessoa</h2><p>Tarefas compartilhadas contam para cada responsável; o total conta conteúdos únicos.</p></div></div>${breakdown(r.people, "Pessoa")}</section><section class="panel"><div class="panel-head"><div><h2>Por canal</h2><p>Um conteúdo pode aparecer em mais de um canal.</p></div></div>${breakdown(r.channels, "Canal")}</section></div><section class="panel report-section"><div class="panel-head"><h2>Entregas concluídas · ${r.delivered}</h2></div>${data.tasks.some(isDelivered) ? table(data.tasks.filter(isDelivered)) : empty("Nenhuma entrega concluída neste período.", "")}</section><section class="panel report-section"><div class="panel-head"><h2>Demandas em aberto · ${r.pending}</h2></div>${data.tasks.some((t) => !isDelivered(t)) ? table(data.tasks.filter((t) => !isDelivered(t))) : empty("Nenhuma demanda em aberto neste período.", "")}</section><div class="notice"><strong>Métricas das redes sociais</strong><br>Instagram, YouTube e TikTok ainda não estão conectados às APIs oficiais. Visualizações, alcance e engajamento não fazem parte deste relatório de produção.</div>`
-  );
+  const r=insightReport;
+  if(!r)return empty('Carregando relatório…','');
+  const metrics=[['Planejadas',r.planned],['Entregues',r.delivered],['Em aberto',r.pending],['Postadas',r.posted],['Atrasadas',r.overdue],['Conclusão',r.rate+'%']];
+  let angle=0;
+  const segments=states.map((s,i)=>{const begin=angle;angle+=r.planned ? (r.statuses[s] || 0)*360/r.planned : 0;return `${colors[i]} ${begin}deg ${angle}deg`;});
+  const donut=`<section class="panel insight-chart"><div class="panel-head"><h2>Distribuição por status</h2></div><div class="panel-body status-chart"><div class="status-donut" role="img" aria-label="${esc(states.map(s=>s+': '+(r.statuses[s] || 0)).join(', '))}" style="background:${r.planned ? 'conic-gradient('+segments.join(',')+')' : '#e7effd'}"><div><strong>${r.planned}</strong><small>conteúdos</small></div></div><div class="status-legend">${states.map((s,i)=>`<div><span class="dot" style="--accent:${colors[i]}"></span>${esc(s)}<b>${r.statuses[s] || 0}</b></div>`).join('')}</div></div></section>`;
+  return heading('Insights','Um resumo visual da produção e das entregas.','<button class="primary" data-action="export-pdf">↓ Exportar PDF</button>','RELATÓRIO DE PRODUÇÃO')+periodControl()+
+    `<div class="notice">Filtro pela deadline. Entregues = Criado + Postado. Cada conteúdo conta uma vez no total, mesmo com vários canais ou responsáveis.</div><div class="insight-stats">${metrics.map(([label,n])=>`<div class="stat"><div class="stat-top">${label}</div><div class="stat-num">${n}</div></div>`).join('')}</div><div class="grid-two">${donut}${deliveryPanel()}</div>`+
+    insightBars('Produção por deadline',r.daily,true,'Agrupada por dia ou semana, conforme o intervalo selecionado.')+
+    `<div class="grid-two">${insightBars('Prazos das entregas',[{name:'No prazo',planned:r.on_time},{name:'Após o prazo',planned:r.late_delivery},{name:'Sem data histórica',planned:r.undated_delivery}],false,r.on_time_rate===null ? 'Sem datas de conclusão suficientes.' : r.on_time_rate+'% das entregas com data registrada foram concluídas no prazo.')}${insightBars('Por pessoa',r.people,true,'Uma tarefa compartilhada aparece para cada responsável.')}</div>`+
+    insightBars('Por canal',r.channels,true,'Um conteúdo pode aparecer em vários canais. A soma por canal pode superar o total.')+
+    '<p class="subtitle">Relatório de produção. Métricas sociais de visualizações e engajamento ainda não estão conectadas.</p>';
 }
 async function downloadReport(button) {
   button.disabled = true;

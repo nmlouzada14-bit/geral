@@ -53,7 +53,7 @@ class Workflow(unittest.TestCase):
         self.call('patch',f"/formats/{orphan['id']}",{'active':True},400)
         t=self.call('get',f'/tasks/{tid}')
         self.assertIn(ch,t['channel_ids'])
-        self.call('patch',f'/tasks/{tid}',{'status':'Finalizado','version':t['version']})
+        self.call('patch',f'/tasks/{tid}',{'status':'Criado','version':t['version']})
         self.call('post','/tasks',{'title':'Invalid','deadline':str(m.today()),'channel_ids':[ch]},400)
         self.call('delete',f'/channels/{ch}',expected=404)
         later=m.today()+timedelta(days=7)
@@ -103,7 +103,7 @@ class Workflow(unittest.TestCase):
         fields={'name':'Original','channel_ids':[ch],'responsible_ids':[1],'frequency':{str(m.today().weekday()):1},'active_from':str(m.today())}
         self.call('post','/formats',fields,201)
         state=self.state();fid=state['formats'][0]['id'];auto=state['tasks'][0]
-        manual=self.task(title='Título personalizado',format_id=fid,responsible_ids=[1],status='Finalizado')[0]
+        manual=self.task(title='Título personalizado',format_id=fid,responsible_ids=[1],status='Criado')[0]
         unrelated=self.task(responsible_ids=[1])[0]
         before=self.call('get',f'/tasks/{manual}')
         self.call('post',f'/tasks/{manual}/comments',{'body':'Preservar'},201)
@@ -149,6 +149,57 @@ class Workflow(unittest.TestCase):
         for values in [[999999],None,'1',[True],[1.5]]:
             self.call('post','/tasks',{'title':'Inválida','deadline':str(m.today()),'responsible_ids':values},400)
         self.assertEqual(len(self.state()['tasks']),2)
+
+    def test_status_migration_and_automatic_deadline_transition(self):
+        from unittest.mock import patch
+        day=m.today()
+        ids=[self.task(status=status)[0] for status in ['Pendente','Em andamento','Revisão','Criado','Postado']]
+        with m.db() as c:
+            c.execute("UPDATE tasks SET status='Finalizado',completed_at='2026-01-01T10:00:00-03:00' WHERE id=?",(ids[3],))
+            c.execute("UPDATE tasks SET status='Agendado' WHERE id=?",(ids[4],))
+            c.execute('PRAGMA user_version=3')
+        m.init()
+        self.assertTrue((m.DATA/'backups/before-v4.sqlite').exists())
+        self.assertEqual(self.call('get',f'/tasks/{ids[3]}')['status'],'Criado')
+        self.assertEqual(self.call('get',f'/tasks/{ids[4]}')['status'],'Postado')
+        self.assertEqual(self.call('get',f'/tasks/{ids[3]}')['completed_at'],'2026-01-01T10:00:00-03:00')
+        self.assertEqual(self.call('get',f'/tasks/{ids[0]}')['status'],'Pendente')
+        with patch.object(m,'today',return_value=day+timedelta(days=1)):
+            for tid in ids[:3]:
+                t=self.call('get',f'/tasks/{tid}')
+                self.assertEqual(t['status'],'Atrasado');self.assertEqual(t['version'],2)
+                self.call('patch',f'/tasks/{tid}',{'version':1,'status':'Criado'},409)
+            for tid,status in zip(ids[3:],['Criado','Postado']):
+                self.assertEqual(self.call('get',f'/tasks/{tid}')['status'],status)
+            self.call('patch',f'/tasks/{ids[0]}',{'version':2,'status':'Criado'})
+            self.assertFalse(self.call('get',f'/tasks/{ids[0]}')['overdue'])
+            self.call('patch',f'/tasks/{ids[0]}',{'version':3,'status':'Revisão'})
+            self.assertEqual(self.call('get',f'/tasks/{ids[0]}')['status'],'Atrasado')
+        for old in ['Finalizado','Agendado']:
+            self.call('post','/tasks',{'title':'Inválida','deadline':str(day),'status':old},400)
+        with m.db() as c:
+            self.assertEqual(c.execute('SELECT status FROM tasks WHERE id=?',(ids[1],)).fetchone()[0],'Atrasado')
+
+    def test_insights_daily_totals_and_empty_pdf(self):
+        from pypdf import PdfReader
+        day=m.today();end=day+timedelta(days=30)
+        query=f'?start={day}&end={end}'
+        empty=self.call('get','/insights'+query)['report']
+        self.assertEqual(sum(r['planned'] for r in empty['daily']),0)
+        with self.client.get('/api/insights.pdf'+query) as response:
+            self.assertEqual(response.status_code,200)
+            self.assertTrue(PdfReader(io.BytesIO(response.data)).pages)
+        self.task(title='PRIVATE_TASK_TITLE',quantity=3,status='Criado')
+        self.task(quantity=2,deadline=str(end),status='Postado')
+        report=self.call('get','/insights'+query)['report']
+        self.assertEqual(report['planned'],5)
+        self.assertEqual(sum(r['planned'] for r in report['daily']),5)
+        self.assertEqual(sum(r['delivered'] for r in report['daily']),5)
+        self.assertEqual(report['statuses'],{'Criado':3,'Postado':2})
+        with self.client.get('/api/insights.pdf'+query) as response:
+            content=''.join(p.extract_text() for p in PdfReader(io.BytesIO(response.data)).pages)
+            self.assertNotIn('PRIVATE_TASK_TITLE',content)
+            self.assertIn('Distribuição por status',content)
 
     def test_auth_and_admin_enforced_server_side(self):
         other=m.app.test_client()
@@ -200,7 +251,7 @@ class Workflow(unittest.TestCase):
         ids=self.task(deadline=yesterday)
         s=self.call('get',f'/state?start={yesterday}&end={m.today()}')
         self.assertTrue(s['tasks'][0]['overdue'])
-        self.call('patch',f'/tasks/{ids[0]}',{'version':1,'status':'Agendado'})
+        self.call('patch',f'/tasks/{ids[0]}',{'version':1,'status':'Postado'})
         self.assertFalse(self.call('get',f'/state?start={yesterday}&end={m.today()}')['tasks'][0]['overdue'])
         self.call('post','/tasks',{'title':'A','deadline':'invalid'},400)
         self.call('post','/tasks',{'title':'A','deadline':str(m.today()),'quantity':101},400)
@@ -229,7 +280,7 @@ class Workflow(unittest.TestCase):
         self.assertEqual(state['formats'][0]['color'],'#3b82f6')
         for t in state['tasks']:self.assertEqual(t['channel_ids'],[ch,second])
         task=state['tasks'][0]
-        self.call('patch',f"/tasks/{task['id']}",{'version':1,'status':'Finalizado'})
+        self.call('patch',f"/tasks/{task['id']}",{'version':1,'status':'Criado'})
         self.assertEqual(len(self.state()['tasks']),2)
         finished=self.state()['tasks'][0]
         self.assertTrue(finished['archived']);self.assertIsNotNone(finished['completed_at'])
@@ -243,15 +294,15 @@ class Workflow(unittest.TestCase):
         self.assertEqual(response.mimetype,'application/pdf')
         from pypdf import PdfReader
         pdf=PdfReader(io.BytesIO(response.data));content=''.join(page.extract_text() for page in pdf.pages)
-        self.assertIn('Conteúdo único',content)
+        self.assertNotIn('Conteúdo único',content)
         self.assertIn('YouTube',content)
-        self.assertIn('Entregas concluídas',content)
-        self.assertIn('Demandas em aberto',content)
+        self.assertIn('Distribuição por status',content)
+        self.assertIn('Produção por deadline',content)
         self.assertGreaterEqual(len(pdf.pages),2)
         response.close()
         self.assertEqual(m.app.test_client().get('/api/insights.pdf'+query).status_code,401)
         # Editing a finished task preserves its completion timestamp; reopening restores it to active work.
-        self.call('patch',f"/tasks/{task['id']}",{'version':2,'status':'Agendado','channel_ids':[second]})
+        self.call('patch',f"/tasks/{task['id']}",{'version':2,'status':'Postado','channel_ids':[second]})
         updated=self.call('get',f"/tasks/{task['id']}")
         self.assertEqual(updated['completed_at'],finished['completed_at'])
         self.assertEqual(updated['channel_ids'],[second])
@@ -282,7 +333,7 @@ class Workflow(unittest.TestCase):
 
     def test_report_range_unknown_dates_empty_and_long_pdf(self):
         old=str(m.today()-timedelta(days=2))
-        self.task(deadline=old,status='Finalizado')
+        self.task(deadline=old,status='Criado')
         query=f'?start={old}&end={old}'
         with m.db() as c:c.execute('UPDATE tasks SET completed_at=NULL')
         report=self.call('get','/insights'+query)['report']
@@ -296,7 +347,8 @@ class Workflow(unittest.TestCase):
             self.assertEqual(response.status_code,200)
             from pypdf import PdfReader
             pdf=PdfReader(io.BytesIO(response.data))
-            self.assertGreater(len(pdf.pages),3)
+            self.assertLessEqual(len(pdf.pages),4)
+            self.assertNotIn('Título de conteúdo',''.join(p.extract_text() for p in pdf.pages))
             self.assertIn('45',''.join(p.extract_text() for p in pdf.pages))
 
     def test_format_edit_updates_existing_deliveries(self):
