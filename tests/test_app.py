@@ -61,6 +61,101 @@ class Workflow(unittest.TestCase):
         self.assertEqual(self.call('get',f'/tasks/{ids[0]}')['status'],'Em andamento')
         self.assertEqual(self.call('get',f'/tasks/{ids[1]}')['status'],'Postado')
 
+    def test_whatsapp_delivery_deduplication_and_reentry(self):
+        from unittest.mock import patch
+        from notifications import process_once
+        self.call('patch','/users/1/whatsapp',{'whatsapp':'+55 (11) 99999-9999'})
+        self.call('post','/users',{'name':'Editor','email':'editor@example.com','role':'Editor','whatsapp':'5521999999999'},201)
+        uid=next(u['id'] for u in self.state()['users'] if u['email']=='editor@example.com')
+        tid=self.task(deadline=str(m.today()-timedelta(days=1)),responsible_ids=[1,uid])[0]
+        sent=[]
+        def sender(config,number,body):
+            sent.append((number,body));return 'sent','provider-id'
+        env={'WHATSAPP_NOTIFICATIONS_ENABLED':'1','EVOLUTION_API_KEY':'test-only-key'}
+        with patch.dict(os.environ,env):
+            process_once(sender);process_once(sender);m.init();process_once(sender)
+            self.assertEqual(len(sent),2)
+            self.assertIn(f'/?task={tid}',sent[0][1]);self.assertIn('Entrega',sent[0][1])
+            t=self.call('get',f'/tasks/{tid}')
+            self.call('patch',f'/tasks/{tid}',{'version':t['version'],'status':'Criado'})
+            t=self.call('get',f'/tasks/{tid}')
+            self.call('patch',f'/tasks/{tid}',{'version':t['version'],'status':'Revisão'})
+            process_once(sender);self.assertEqual(len(sent),4)
+            info=self.call('get','/integrations/whatsapp')
+            self.assertEqual(info['counts']['sent'],4)
+            self.assertNotIn('test-only-key',str(info))
+        member=m.app.test_client();self.login(member,'editor@example.com')
+        self.call('post','/password',{'current':'Initial-Test-2026!','password':'Personal-Editor-2026!'},client=member)
+        self.call('patch','/users/1/whatsapp',{'whatsapp':'5511999999999'},403,client=member)
+        self.call('get','/integrations/whatsapp',expected=403,client=member)
+        self.assertTrue(all('whatsapp' not in u for u in self.state(member)['users']))
+        self.call('patch','/users/1/whatsapp',{'whatsapp':'not-a-number'},400)
+
+    def test_whatsapp_background_overdue_disabled_cancel_and_uncertain(self):
+        from unittest.mock import patch
+        from notifications import process_once
+        self.call('patch','/users/1/whatsapp',{'whatsapp':'5511999999999'})
+        tid=self.task(responsible_ids=[1])[0]
+        day=m.today();calls=[]
+        def sender(*args):calls.append(args);return 'uncertain','Timeout'
+        with patch.dict(os.environ,{'WHATSAPP_NOTIFICATIONS_ENABLED':'0','EVOLUTION_API_KEY':'test-only-key'}):
+            process_once(sender)
+        self.assertFalse(calls)
+        with patch.dict(os.environ,{'WHATSAPP_NOTIFICATIONS_ENABLED':'1','EVOLUTION_API_KEY':'test-only-key'}),patch.object(m,'today',return_value=day+timedelta(days=1)):
+            process_once(sender);process_once(sender)
+            self.assertEqual(len(calls),1)
+            with m.db() as c:
+                self.assertEqual(c.execute('SELECT status FROM tasks WHERE id=?',(tid,)).fetchone()[0],'Atrasado')
+                self.assertEqual(c.execute('SELECT state FROM overdue_notifications').fetchone()[0],'uncertain')
+        # Explicit 429 responses retry, but a task completed before retry is cancelled.
+        tid2=self.task(responsible_ids=[1],status='Atrasado')[0]
+        with patch.dict(os.environ,{'WHATSAPP_NOTIFICATIONS_ENABLED':'1','EVOLUTION_API_KEY':'test-only-key'}):
+            process_once(lambda *args:('retry','429'))
+            self.call('patch',f'/tasks/{tid2}',{'version':1,'status':'Postado'})
+            process_once(sender)
+            with m.db() as c:
+                self.assertEqual(c.execute('SELECT state FROM overdue_notifications WHERE task_id=?',(tid2,)).fetchone()[0],'cancelled')
+        self.assertEqual(len(calls),1)
+
+    def test_notification_queue_concurrent_workers_and_retry(self):
+        from unittest.mock import patch
+        from concurrent.futures import ThreadPoolExecutor
+        from notifications import process_once
+        self.call('patch','/users/1/whatsapp',{'whatsapp':'5511999999999'})
+        self.task(responsible_ids=[1],status='Atrasado')
+        calls=[]
+        def sender(*args): calls.append(args);return 'sent','confirmed'
+        with patch.dict(os.environ,{'WHATSAPP_NOTIFICATIONS_ENABLED':'1','EVOLUTION_API_KEY':'test-only-key'}):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                list(pool.map(lambda _:process_once(sender),range(2)))
+            self.assertEqual(len(calls),1)
+            self.task(responsible_ids=[1],status='Atrasado')
+            process_once(lambda *args:('retry','429'))
+            with m.db() as c:c.execute("UPDATE overdue_notifications SET next_attempt=0 WHERE state='retry'")
+            process_once(sender)
+            self.assertEqual(len(calls),2)
+            with m.db() as c:self.assertEqual(c.execute("SELECT count(*) FROM overdue_notifications WHERE state='sent'").fetchone()[0],2)
+
+    def test_evolution_payload_and_error_handling_without_network(self):
+        from unittest.mock import patch,MagicMock
+        from urllib.error import HTTPError,URLError
+        from notifications import configuration,send_message
+        with patch.dict(os.environ,{'WHATSAPP_NOTIFICATIONS_ENABLED':'1','EVOLUTION_API_KEY':'test-only-key'}):
+            config=configuration()
+        opener=MagicMock();response=opener.open.return_value.__enter__.return_value
+        response.read.return_value=b'{"key":{"id":"confirmed"}}'
+        with patch('notifications.request.build_opener',return_value=opener):
+            self.assertEqual(send_message(config,'5511999999999','Test'),('sent','confirmed'))
+            req=opener.open.call_args.args[0]
+            self.assertEqual(req.full_url,'https://evolution-api-evolution-api.2dxvsk.easypanel.host/message/sendText/zayedd')
+            import json
+            self.assertEqual(json.loads(req.data),{'number':'5511999999999','text':'Test','linkPreview':False})
+            for code,state in [(401,'failed'),(429,'retry'),(500,'uncertain')]:
+                opener.open.side_effect=HTTPError(req.full_url,code,'error',{},None)
+                self.assertEqual(send_message(config,'5511999999999','Test')[0],state)
+            opener.open.side_effect=URLError('timeout')
+            self.assertEqual(send_message(config,'5511999999999','Test')[0],'uncertain')
+
     def test_channel_edit_delete_preserves_history_and_pauses_orphans(self):
         ch=self.channel()
         self.call('post','/channels',{'name':'YouTube','url':'https://youtube.com/test','color':'#123456'},201)

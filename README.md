@@ -148,3 +148,29 @@ O roteiro `tests/browser_deletion.py` valida edição/exclusão de canais e excl
 - **Copiar tarefas:** botão discreto ao lado de Excluir selecionadas. Copia apenas a seleção atual, na ordem da lista, uma tarefa por linha no formato `Título - DD/MM`, usando a deadline. Se o navegador bloquear a área de transferência, apresenta o texto selecionado para cópia manual. A identificação numérica não aparece mais na lista ou no modal da tarefa.
 
 `tests/browser_bulk_status.py` valida seleção, cópia, cancelamento, status em lote e reabertura de arquivadas em instância isolada vazia (porta 8010 ou `TEST_URL`).
+
+### WhatsApp via Evolution API
+
+Integração direta com a Evolution v2; não depende de n8n. O Docker inicia o Gunicorn com `gunicorn.conf.py`, cujo hook inicia o verificador em segundo plano quando a integração está habilitada e configurada. Verifica tarefas existentes aproximadamente a cada minuto, mesmo sem navegador aberto. A geração de tarefas recorrentes continua vinculada à abertura dos períodos no calendário/lista.
+
+1. Implante a versão e cadastre os números em **Configurações → Equipe → Editar WhatsApp**. Use código do país + DDD + número, como `5511999999999`. Apenas o administrador pode consultar/editar números. Deixar vazio desativa alertas daquela pessoa.
+2. No EasyPanel, **contentos / web → Ambiente**, acrescente as linhas abaixo às variáveis existentes. Substitua o valor de `EVOLUTION_API_KEY` pela chave válida da Evolution diretamente no painel, sem publicar no Git/chat:
+
+```dotenv
+EVOLUTION_API_URL=https://evolution-api-evolution-api.2dxvsk.easypanel.host
+EVOLUTION_INSTANCE=zayedd
+CONTENTOS_PUBLIC_URL=https://contentos-web.2dxvsk.easypanel.host
+EVOLUTION_API_KEY=SUBSTITUA_PELA_CHAVE_NO_PAINEL
+WHATSAPP_NOTIFICATIONS_ENABLED=1
+```
+
+3. Salve e implante novamente. Mantenha a instância `zayedd` conectada ao WhatsApp. A URL da API é a raiz, **sem `/manager/`**. O protocolo usa `POST /message/sendText/zayedd`, cabeçalho `apikey` e JSON `{number,text,linkPreview:false}`. HTTPS é obrigatório e redirecionamentos não são seguidos.
+4. Configurações mostra se a integração está habilitada/configurada e os totais enviados à Evolution, pendentes, falhos e sem confirmação. “Enviado” significa aceito pela API com ID de mensagem, não confirmação de leitura/entrega pelo destinatário. Para conferir ao vivo, use uma tarefa atribuída a um número seu cadastrado e altere para Atrasado; esse passo envia uma mensagem real.
+
+A mensagem inclui título, deadline e link `/?task=ID`, que abre o detalhe após login. Cada responsável com número cadastrado recebe uma mensagem por ocorrência de atraso. Se a tarefa sair de Atrasado e voltar, é uma nova ocorrência. Não se repetem notificações por refresh ou reinício. Destinatários são os responsáveis atuais na verificação; cadastrar número/atribuir uma pessoa a uma ocorrência ainda atrasada pode gerar seu alerta.
+
+A fila fica no mesmo SQLite persistente, com chave única por tarefa, pessoa e ocorrência e reserva transacional entre workers. Antes de enviar, revalida status, ocorrência e responsável; pendências de tarefas resolvidas/desatribuídas são canceladas. Erro 429 tem até cinco tentativas com espera crescente. Falhas definitivas ficam registradas. Timeout, erro 5xx, resposta sem ID ou reinício durante envio são marcados como **sem confirmação** e não são reenviados automaticamente, pois a API pode já ter aceitado a mensagem. Confira esses casos no manager da Evolution. Não há garantia externa de entrega exatamente uma vez.
+
+A migração v5 preserva dados e cria `DATA_DIR/backups/before-v5.sqlite` para bancos v4. Tarefas que já estavam em Atrasado antes da migração não recebem alertas acumulados; novas ocorrências são notificadas. Para interromper todos os envios, defina `WHATSAPP_NOTIFICATIONS_ENABLED=0` e implante. Nenhuma chave ou corpo de resposta da API é exibido nos logs/interface.
+
+Testes automatizados usam remetentes simulados, sem enviar WhatsApp real. Cobrem payload, erros, duplicação, reinício, concorrência, permissões e cancelamento. `tests/browser_whatsapp.py` valida cadastro de números e links diretos após login numa instância isolada vazia na porta 8012 (ou `TEST_URL`), com notificações desativadas.

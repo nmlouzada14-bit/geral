@@ -5,3 +5,6 @@
 !static/
 !static/**
 !reports.py
+
+!notifications.py
+!gunicorn.conf.py

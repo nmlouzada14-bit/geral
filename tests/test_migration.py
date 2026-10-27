@@ -18,7 +18,7 @@ class Migration(unittest.TestCase):
 import app
 app.init()
 with app.db() as c:
- assert c.execute('PRAGMA user_version').fetchone()[0]==4
+ assert c.execute('PRAGMA user_version').fetchone()[0]==5
  assert c.execute('SELECT password FROM users').fetchone()[0]=='preserve-this-hash'
  assert c.execute('SELECT title FROM tasks').fetchone()[0]=='Não perder'
  assert c.execute('SELECT completed_at FROM tasks').fetchone()[0] is None

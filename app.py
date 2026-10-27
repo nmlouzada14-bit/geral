@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from functools import wraps
 from urllib.parse import urlsplit
-from flask import Flask, request, jsonify, session, send_file, abort
+from flask import Flask, request, jsonify, session, send_file, abort, has_request_context
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
@@ -42,8 +42,8 @@ def init():
     with db() as source:
         old = source.execute("SELECT 1 FROM sqlite_master WHERE name='tasks'").fetchone()
         version = source.execute('PRAGMA user_version').fetchone()[0]
-        if old and version < 4:
-            backup = DATA / 'backups' / ('before-v2.sqlite' if version < 2 else 'before-v3.sqlite' if version < 3 else 'before-v4.sqlite')
+        if old and version < 5:
+            backup = DATA / 'backups' / ('before-v2.sqlite' if version < 2 else 'before-v3.sqlite' if version < 3 else 'before-v4.sqlite' if version < 4 else 'before-v5.sqlite')
             backup.parent.mkdir(exist_ok=True)
             if not backup.exists():
                 with sqlite3.connect(backup) as target:
@@ -87,6 +87,15 @@ def init():
         if c.execute('PRAGMA user_version').fetchone()[0] < 4:
             c.execute("UPDATE tasks SET status=CASE status WHEN 'Finalizado' THEN 'Criado' ELSE 'Postado' END,version=version+1 WHERE status IN ('Finalizado','Agendado')")
             c.execute('PRAGMA user_version=4')
+        if c.execute('PRAGMA user_version').fetchone()[0] < 5:
+            if 'whatsapp' not in {r['name'] for r in c.execute('PRAGMA table_info(users)')}:
+                c.execute("ALTER TABLE users ADD COLUMN whatsapp TEXT NOT NULL DEFAULT ''")
+            if 'overdue_episode' not in {r['name'] for r in c.execute('PRAGMA table_info(tasks)')}:
+                c.execute('ALTER TABLE tasks ADD COLUMN overdue_episode INTEGER NOT NULL DEFAULT 0')
+            c.execute("CREATE TABLE IF NOT EXISTS overdue_notifications(id INTEGER PRIMARY KEY,task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,episode INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_attempt REAL NOT NULL DEFAULT 0,claimed_at REAL,delivered_at TEXT,error TEXT,message_id TEXT,UNIQUE(task_id,user_id,episode))")
+            c.execute("CREATE TRIGGER IF NOT EXISTS overdue_insert AFTER INSERT ON tasks WHEN NEW.status='Atrasado' BEGIN UPDATE tasks SET overdue_episode=1 WHERE id=NEW.id; END")
+            c.execute("CREATE TRIGGER IF NOT EXISTS overdue_transition AFTER UPDATE OF status ON tasks WHEN NEW.status='Atrasado' AND OLD.status!='Atrasado' BEGIN UPDATE tasks SET overdue_episode=overdue_episode+1 WHERE id=NEW.id; END")
+            c.execute('PRAGMA user_version=5')
         if not c.execute('SELECT id FROM users WHERE email=?', (ADMIN,)).fetchone():
             pw = os.environ.get('INITIAL_PASSWORD')
             if not pw or len(pw) < 7:
@@ -165,7 +174,12 @@ def ref(c, table, value, required=False):
     return value
 
 def public_user(u):
-    return {k:u[k] for k in ('id','name','email','role','must_change')}
+    result={k:u[k] for k in ('id','name','email','role','must_change')}
+    if has_request_context() and session.get('uid'):
+        with db() as c:
+            admin=c.execute('SELECT email FROM users WHERE id=?',(session['uid'],)).fetchone()
+        if admin and admin['email']==ADMIN: result['whatsapp']=u['whatsapp']
+    return result
 
 @app.get('/')
 def index(): return send_file(ROOT/'static/index.html')
@@ -224,8 +238,34 @@ def users():
     if not pw: abort(503,'Configure INITIAL_PASSWORD na hospedagem.')
     with db() as c:
         if c.execute('SELECT id FROM users WHERE email=?',(email,)).fetchone(): abort(409,'Este e-mail já está na equipe.')
-        c.execute('INSERT INTO users(name,email,role,password) VALUES(?,?,?,?)',(text(d,'name'),email,text(d,'role'),generate_password_hash(pw)))
+        c.execute('INSERT INTO users(name,email,role,password,whatsapp) VALUES(?,?,?,?,?)',(text(d,'name'),email,text(d,'role'),generate_password_hash(pw),phone(d.get('whatsapp',''))))
     return {'ok':True},201
+
+def phone(value):
+    if not isinstance(value,str): abort(400,'WhatsApp inválido.')
+    number=re.sub(r'[ +().-]','',value)
+    if number and not re.fullmatch(r'[1-9][0-9]{9,14}',number): abort(400,'Use o número com código do país e DDD, por exemplo 5511999999999.')
+    return number
+
+
+@app.patch('/api/users/<int:id>/whatsapp')
+@auth(admin=True)
+def update_whatsapp(id):
+    number=phone(request.get_json().get('whatsapp',''))
+    with db() as c:
+        if not c.execute('UPDATE users SET whatsapp=? WHERE id=?',(number,id)).rowcount: abort(404)
+    return {'ok':True}
+
+
+@app.get('/api/integrations/whatsapp')
+@auth(admin=True)
+def whatsapp_status():
+    from notifications import configuration
+    config=configuration()
+    with db() as c:
+        counts={r['state']:r['n'] for r in c.execute('SELECT state,count(*) AS n FROM overdue_notifications GROUP BY state')}
+    return {'enabled':config['enabled'],'configured':config['ready'],'instance':config['instance'],'counts':counts}
+
 
 @app.post('/api/channels')
 @auth()

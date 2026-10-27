@@ -13,6 +13,8 @@ const selectedTasks = new Set();
 const activeChannels = () => data.channels.filter(c => !c.deleted);
 const doneStates = ["Criado", "Postado"];
 const isDelivered = (t) => doneStates.includes(t.status);
+let whatsappInfo = null;
+let pendingTaskLink = Number(new URLSearchParams(location.search).get("task")) || null;
 let insightReport = null,
   archiveOpen = false;
 const states = [
@@ -164,14 +166,17 @@ async function refresh() {
   const seq = ++requestSeq;
   try {
     const query = `?start=${start}&end=${end}`;
-    const [d, insights] = await Promise.all([
+    const [d, insights, whatsapp] = await Promise.all([
       api("/state" + query),
       page === "insights" ? api("/insights" + query) : Promise.resolve(null),
+      page === "settings" ? api("/integrations/whatsapp") : Promise.resolve(null),
     ]);
     if (seq !== requestSeq) return;
     data = d;
     insightReport = insights?.report || null;
+    whatsappInfo = whatsapp;
     render();
+    if(pendingTaskLink){ const id=pendingTaskLink; pendingTaskLink=null; await openTask(id); }
   } catch (e) {
     toast(e.message);
   }
@@ -438,7 +443,7 @@ function settings() {
       '<button class="primary" data-action="new-user">＋ Adicionar pessoa</button>',
       "CONFIGURAÇÕES",
     ) +
-    `<div class="notice">Apenas ${ADMIN} tem acesso a esta área. A senha inicial configurada na hospedagem é usada para novos acessos; cada pessoa cria uma senha pessoal ao entrar.</div><section class="panel"><div class="panel-head"><h2>Equipe</h2><small>${data.users.length} pessoas</small></div><div class="table-wrap"><table><thead><tr><th>Pessoa</th><th>E-mail</th><th>Cargo</th><th>Acesso</th></tr></thead><tbody>${data.users.map((u) => `<tr><td><span class="person">${avatar(u)}${esc(u.name)}</span></td><td>${esc(u.email)}</td><td>${esc(u.role)}</td><td><span class="badge">${u.must_change ? "Primeiro acesso pendente" : "Ativo"}</span></td></tr>`).join("")}</tbody></table></div></section>`
+    `<div class="notice">Apenas ${ADMIN} tem acesso a esta área. A senha inicial configurada na hospedagem é usada para novos acessos; cada pessoa cria uma senha pessoal ao entrar.</div><section class="panel"><div class="panel-head"><h2>Equipe</h2><small>${data.users.length} pessoas</small></div><div class="table-wrap"><table><thead><tr><th>Pessoa</th><th>E-mail</th><th>Cargo</th><th>Acesso</th><th>WhatsApp</th></tr></thead><tbody>${data.users.map((u) => `<tr><td><span class="person">${avatar(u)}${esc(u.name)}</span></td><td>${esc(u.email)}</td><td>${esc(u.role)}</td><td><span class="badge">${u.must_change ? "Primeiro acesso pendente" : "Ativo"}</span></td><td>${esc(u.whatsapp || "Não cadastrado")} <button class="ghost" data-whatsapp="${u.id}">Editar WhatsApp</button></td></tr>`).join("")}</tbody></table></div></section>${whatsappPanel()}`
   );
 }
 function field(label, name, type = "text", value = "", extra = "") {
@@ -627,6 +632,7 @@ function openUser() {
         "",
         'required placeholder="Social media, editor, designer…"',
       ) +
+      field('WhatsApp (opcional, com país e DDD)','whatsapp','tel','', 'placeholder="5511999999999" maxlength="30"') +
       '<div class="notice">A pessoa entrará com a senha inicial definida e deverá trocá-la no primeiro acesso. O cadastro não envia e-mail automaticamente.</div>',
     async (d) => {
       await api("/users", "POST", d);
@@ -650,6 +656,7 @@ function navigate(p) {
   refresh();
 }
 function bind() {
+  $$("[data-whatsapp]").forEach(b=>b.onclick=()=>editWhatsApp(Number(b.dataset.whatsapp)));
   $$('[data-edit-channel]').forEach(b=>b.onclick=()=>openChannel(Number(b.dataset.editChannel)));
   $$('[data-delete-channel]').forEach(b=>b.onclick=()=>deleteChannel(Number(b.dataset.deleteChannel)));
   $$('[data-select-task]').forEach(b=>b.onchange=()=>{
@@ -1112,4 +1119,17 @@ async function copySelectedTasks() {
     modal('Copiar tarefas',`<p>O navegador não permitiu copiar automaticamente. Copie o texto selecionado abaixo.</p><textarea id="copy-content" aria-label="Tarefas para copiar" readonly rows="10">${esc(content)}</textarea>`,async()=>{},'Fechar');
     $('#copy-content').focus();$('#copy-content').select();
   }
+}
+
+function editWhatsApp(id) {
+  const u=person(id);
+  modal('WhatsApp de '+esc(u.name),field('WhatsApp com país e DDD','whatsapp','tel',u.whatsapp || '', 'placeholder="5511999999999" maxlength="30"')+'<p class="subtitle">Esse número receberá alertas de tarefas atrasadas. Deixe vazio para desativar os alertas desta pessoa.</p>',async d=>{
+    await api('/users/'+id+'/whatsapp','PATCH',d);toast('WhatsApp atualizado.');
+  },'Salvar WhatsApp');
+}
+function whatsappPanel() {
+  const info=whatsappInfo;if(!info)return '';
+  const label=!info.enabled ? 'Desativado' : !info.configured ? 'Configuração incompleta' : 'Configurado para envio automático';
+  const c=info.counts;
+  return `<section class="panel"><div class="panel-head"><div><h2>Alertas pelo WhatsApp</h2><p>${label} · Instância ${esc(info.instance)}</p></div></div><div class="panel-body"><p>Uma mensagem por responsável a cada ocorrência de atraso. Verificação a cada minuto, mesmo com o navegador fechado. Cadastre os números acima para habilitar cada pessoa.</p><p>Enviados à Evolution: <strong>${c.sent || 0}</strong> · Pendentes: <strong>${(c.pending || 0)+(c.retry || 0)+(c.sending || 0)}</strong> · Falhas: <strong>${c.failed || 0}</strong> · Sem confirmação: <strong>${c.uncertain || 0}</strong></p><small>Envios sem confirmação não são repetidos automaticamente; confira na Evolution. A configuração da chave e a ativação são feitas no ambiente da hospedagem.</small></div></section>`;
 }
