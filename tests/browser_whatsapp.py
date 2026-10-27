@@ -21,9 +21,9 @@ with sync_playwright() as pw:
     page.locator('.nav [data-page=settings]').click()
     expect(page.get_by_role('heading',name='Alertas pelo WhatsApp')).to_be_visible()
     expect(page.locator('body')).to_contain_text('Desativado')
-    page.locator('[data-whatsapp]').click()
+    page.locator('[data-edit-member]').click()
     page.get_by_label('WhatsApp com país e DDD').fill('+55 (11) 99999-9999')
-    page.get_by_role('button',name='Salvar WhatsApp',exact=True).click()
+    page.get_by_role('button',name='Salvar membro',exact=True).click()
     expect(page.locator('#modal')).not_to_be_visible()
     expect(page.locator('body')).to_contain_text('5511999999999')
     today=req('/state')['today']

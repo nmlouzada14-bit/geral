@@ -42,8 +42,8 @@ def init():
     with db() as source:
         old = source.execute("SELECT 1 FROM sqlite_master WHERE name='tasks'").fetchone()
         version = source.execute('PRAGMA user_version').fetchone()[0]
-        if old and version < 5:
-            backup = DATA / 'backups' / ('before-v2.sqlite' if version < 2 else 'before-v3.sqlite' if version < 3 else 'before-v4.sqlite' if version < 4 else 'before-v5.sqlite')
+        if old and version < 6:
+            backup = DATA / 'backups' / ('before-v2.sqlite' if version < 2 else 'before-v3.sqlite' if version < 3 else 'before-v4.sqlite' if version < 4 else 'before-v5.sqlite' if version < 5 else 'before-v6.sqlite')
             backup.parent.mkdir(exist_ok=True)
             if not backup.exists():
                 with sqlite3.connect(backup) as target:
@@ -96,11 +96,18 @@ def init():
             c.execute("CREATE TRIGGER IF NOT EXISTS overdue_insert AFTER INSERT ON tasks WHEN NEW.status='Atrasado' BEGIN UPDATE tasks SET overdue_episode=1 WHERE id=NEW.id; END")
             c.execute("CREATE TRIGGER IF NOT EXISTS overdue_transition AFTER UPDATE OF status ON tasks WHEN NEW.status='Atrasado' AND OLD.status!='Atrasado' BEGIN UPDATE tasks SET overdue_episode=overdue_episode+1 WHERE id=NEW.id; END")
             c.execute('PRAGMA user_version=5')
-        if not c.execute('SELECT id FROM users WHERE email=?', (ADMIN,)).fetchone():
+        if c.execute('PRAGMA user_version').fetchone()[0] < 6:
+            if 'is_admin' not in {r['name'] for r in c.execute('PRAGMA table_info(users)')}:
+                c.execute('ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0')
+                c.execute('UPDATE users SET is_admin=1 WHERE email=?',(ADMIN,))
+            c.execute("CREATE TABLE IF NOT EXISTS digest_runs(run_key TEXT PRIMARY KEY,day TEXT NOT NULL,kind TEXT NOT NULL,created_at TEXT NOT NULL)")
+            c.execute("CREATE TABLE IF NOT EXISTS digest_messages(id INTEGER PRIMARY KEY,run_key TEXT NOT NULL REFERENCES digest_runs(run_key) ON DELETE CASCADE,part INTEGER NOT NULL,recipient TEXT NOT NULL,body TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_attempt REAL NOT NULL DEFAULT 0,claimed_at REAL,error TEXT,message_id TEXT,UNIQUE(run_key,part))")
+            c.execute('PRAGMA user_version=6')
+        if not c.execute('SELECT id FROM users WHERE is_admin=1').fetchone():
             pw = os.environ.get('INITIAL_PASSWORD')
             if not pw or len(pw) < 7:
                 raise RuntimeError('Defina INITIAL_PASSWORD (mínimo 7 caracteres) para criar o administrador.')
-            c.execute('INSERT INTO users(name,email,role,password) VALUES(?,?,?,?)', ('Nícolas Louzada',ADMIN,'Administrador',generate_password_hash(pw)))
+            c.execute('INSERT INTO users(name,email,role,password,is_admin) VALUES(?,?,?,?,1)', ('Nícolas Louzada',ADMIN,'Administrador',generate_password_hash(pw)))
 
 init()
 
@@ -113,7 +120,7 @@ def auth(admin=False):
             if not u: abort(401, 'Entre para continuar.')
             if u['must_change'] and request.path not in ['/api/me','/api/password','/api/logout']:
                 abort(403, 'Troque a senha inicial para continuar.')
-            if admin and u['email'] != ADMIN: abort(403, 'Apenas o administrador pode gerenciar a equipe.')
+            if admin and not u['is_admin']: abort(403, 'Apenas o administrador pode gerenciar a equipe.')
             with db() as c:
                 c.execute("UPDATE tasks SET status='Atrasado',version=version+1 WHERE deadline<? AND status NOT IN ('Criado','Postado','Atrasado')",(str(today()),))
             return fn(*args, **kwargs)
@@ -174,11 +181,11 @@ def ref(c, table, value, required=False):
     return value
 
 def public_user(u):
-    result={k:u[k] for k in ('id','name','email','role','must_change')}
+    result={k:u[k] for k in ('id','name','email','role','must_change','is_admin')}
     if has_request_context() and session.get('uid'):
         with db() as c:
-            admin=c.execute('SELECT email FROM users WHERE id=?',(session['uid'],)).fetchone()
-        if admin and admin['email']==ADMIN: result['whatsapp']=u['whatsapp']
+            admin=c.execute('SELECT is_admin FROM users WHERE id=?',(session['uid'],)).fetchone()
+        if admin and admin['is_admin']: result['whatsapp']=u['whatsapp']
     return result
 
 @app.get('/')
@@ -257,6 +264,30 @@ def update_whatsapp(id):
     return {'ok':True}
 
 
+@app.patch('/api/users/<int:id>')
+@auth(admin=True)
+def update_member(id):
+    d=request.get_json();name=text(d,'name');email=text(d,'email').lower();role=text(d,'role');number=phone(d.get('whatsapp',''))
+    if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email): abort(400,'E-mail inválido.')
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if not c.execute('SELECT id FROM users WHERE id=?',(id,)).fetchone(): abort(404)
+        if c.execute('SELECT id FROM users WHERE email=? AND id!=?',(email,id)).fetchone(): abort(409,'Este e-mail já está na equipe.')
+        c.execute('UPDATE users SET name=?,email=?,role=?,whatsapp=? WHERE id=?',(name,email,role,number,id))
+    return {'ok':True}
+
+
+@app.post('/api/integrations/whatsapp/daily')
+@auth(admin=True)
+def dispatch_daily():
+    from notifications import configuration,queue_daily
+    config=configuration()
+    if not config['enabled'] or not config['ready']: abort(503,'Ative e configure a integração antes de enviar.')
+    token=request.get_json().get('request_id')
+    if not isinstance(token,str) or not re.fullmatch(r'[a-zA-Z0-9_-]{16,100}',token): abort(400,'Identificador de envio inválido.')
+    return queue_daily(today(), 'manual:'+token, 'manual',config),202
+
+
 @app.get('/api/integrations/whatsapp')
 @auth(admin=True)
 def whatsapp_status():
@@ -264,7 +295,8 @@ def whatsapp_status():
     config=configuration()
     with db() as c:
         counts={r['state']:r['n'] for r in c.execute('SELECT state,count(*) AS n FROM overdue_notifications GROUP BY state')}
-    return {'enabled':config['enabled'],'configured':config['ready'],'instance':config['instance'],'counts':counts}
+        group_counts={r['state']:r['n'] for r in c.execute('SELECT state,count(*) AS n FROM digest_messages GROUP BY state')}
+    return {'enabled':config['enabled'],'configured':config['ready'],'instance':config['instance'],'counts':counts,'group_counts':group_counts}
 
 
 @app.post('/api/channels')

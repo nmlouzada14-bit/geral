@@ -13,6 +13,7 @@ const selectedTasks = new Set();
 const activeChannels = () => data.channels.filter(c => !c.deleted);
 const doneStates = ["Criado", "Postado"];
 const isDelivered = (t) => doneStates.includes(t.status);
+let calendarChannel = "";
 let whatsappInfo = null;
 let pendingTaskLink = Number(new URLSearchParams(location.search).get("task")) || null;
 let insightReport = null,
@@ -217,7 +218,7 @@ function render() {
     `<div class="layout"><aside class="sidebar"><div class="brand"><span class="brand-icon">c</span>content<em>OS</em></div><div class="workspace"><span class="workspace-mark">Z</span><div>Zayed Company<small>WORKSPACE DE CONTEÚDO</small></div></div><div class="nav-label">Seu workspace</div><nav class="nav" aria-label="Principal">${Object.entries(
       titles,
     )
-      .filter(([k]) => k !== "settings" || user.email === ADMIN)
+      .filter(([k]) => k !== "settings" || user.is_admin)
       .map(
         ([k, v]) =>
           `<button data-page="${k}" class="${page === k ? "active" : ""}">${icon(k)}${v}</button>`,
@@ -408,7 +409,7 @@ function calendar() {
       "O que vai ao ar, no dia certo. Clique em uma entrega para atualizar.",
       newTask(),
     ) +
-    `<div class="toolbar"><div class="period"><button data-action="prev-calendar" aria-label="Período anterior">‹</button><button data-action="today-calendar">Hoje</button><button data-action="next-calendar" aria-label="Próximo período">›</button><h2 style="margin-left:10px">${calView === "month" ? fmt(anchor, { month: "long", year: "numeric" }) : calView === "day" ? fmt(anchor, { day: "2-digit", month: "long" }) : fmt(start) + " — " + fmt(end)}</h2></div><div class="segmented">${[
+    `<div class="toolbar"><div class="period"><button data-action="prev-calendar" aria-label="Período anterior">‹</button><button data-action="today-calendar">Hoje</button><button data-action="next-calendar" aria-label="Próximo período">›</button><h2 style="margin-left:10px">${calView === "month" ? fmt(anchor, { month: "long", year: "numeric" }) : calView === "day" ? fmt(anchor, { day: "2-digit", month: "long" }) : fmt(start) + " — " + fmt(end)}</h2></div><select id="calendar-channel" aria-label="Filtrar canal no calendário"><option value="">Todos os canais</option>${data.channels.filter(c=>!c.deleted || data.tasks.some(t=>t.channel_ids.includes(c.id))).map(c=>`<option value="${c.id}" ${calendarChannel===String(c.id) ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><div class="segmented">${[
       ["day", "Dia"],
       ["week", "Semana"],
       ["month", "Mês"],
@@ -423,16 +424,17 @@ function calendar() {
       .map(
         (d) =>
           `<div class="calendar-day ${calView === "month" && d.slice(0, 7) !== anchor.slice(0, 7) ? "outside" : ""}"><span class="calendar-date ${d === data.today ? "today" : ""}">${parse(d).getDate()}</span>${data.tasks
-            .filter((t) => t.deadline === d)
+            .filter((t) => t.deadline === d && (!calendarChannel || t.channel_ids.includes(Number(calendarChannel))))
+            .sort((a,b)=>Number(a.status==="Postado")-Number(b.status==="Postado") || a.id-b.id)
             .map(
               (t) =>
-                `<button class="calendar-event" style="--accent:${taskColor(t)};--event-bg:${taskColor(t)}12" data-task="${t.id}">${esc(t.title)}${channelTag(t)}<small>${esc(t.status)}${t.overdue ? " · Atrasada" : ""}</small></button>`,
+                `<button class="calendar-event ${t.status === "Postado" ? "posted" : ""}" style="--accent:${t.status === "Postado" ? "#16834a" : taskColor(t)};--event-bg:${t.status === "Postado" ? "#e8f7ee" : taskColor(t)+"12"}" data-task="${t.id}">${esc(t.title)}${channelTag(t)}<small>${esc(t.status)}${t.overdue ? " · Atrasada" : ""}</small></button>`,
             )
             .join("")}</div>`,
       )
       .join(
         "",
-      )}</div></div><div class="legend">${data.channels.map((c) => `<span><span class="dot" style="--accent:${c.color}"></span>${esc(c.name)}</span>`).join("")}</div>`
+      )}</div></div><div class="legend">${data.channels.filter(c=>!calendarChannel || c.id===Number(calendarChannel)).map((c) => `<span><span class="dot" style="--accent:${c.color}"></span>${esc(c.name)}</span>`).join("")}</div>`
   );
 }
 function settings() {
@@ -443,7 +445,7 @@ function settings() {
       '<button class="primary" data-action="new-user">＋ Adicionar pessoa</button>',
       "CONFIGURAÇÕES",
     ) +
-    `<div class="notice">Apenas ${ADMIN} tem acesso a esta área. A senha inicial configurada na hospedagem é usada para novos acessos; cada pessoa cria uma senha pessoal ao entrar.</div><section class="panel"><div class="panel-head"><h2>Equipe</h2><small>${data.users.length} pessoas</small></div><div class="table-wrap"><table><thead><tr><th>Pessoa</th><th>E-mail</th><th>Cargo</th><th>Acesso</th><th>WhatsApp</th></tr></thead><tbody>${data.users.map((u) => `<tr><td><span class="person">${avatar(u)}${esc(u.name)}</span></td><td>${esc(u.email)}</td><td>${esc(u.role)}</td><td><span class="badge">${u.must_change ? "Primeiro acesso pendente" : "Ativo"}</span></td><td>${esc(u.whatsapp || "Não cadastrado")} <button class="ghost" data-whatsapp="${u.id}">Editar WhatsApp</button></td></tr>`).join("")}</tbody></table></div></section>${whatsappPanel()}`
+    `<div class="notice">Apenas o administrador tem acesso a esta área. A senha inicial configurada na hospedagem é usada para novos acessos; cada pessoa cria uma senha pessoal ao entrar.</div><section class="panel"><div class="panel-head"><h2>Equipe</h2><small>${data.users.length} pessoas</small></div><div class="table-wrap"><table><thead><tr><th>Pessoa</th><th>E-mail</th><th>Cargo</th><th>Acesso</th><th>WhatsApp</th></tr></thead><tbody>${data.users.map((u) => `<tr><td><span class="person">${avatar(u)}${esc(u.name)}</span></td><td>${esc(u.email)}</td><td>${esc(u.role)}</td><td><span class="badge">${u.must_change ? "Primeiro acesso pendente" : "Ativo"}</span></td><td>${esc(u.whatsapp || "Não cadastrado")} <button class="ghost" data-edit-member="${u.id}">Editar membro</button></td></tr>`).join("")}</tbody></table></div></section>${whatsappPanel()}`
   );
 }
 function field(label, name, type = "text", value = "", extra = "") {
@@ -656,7 +658,9 @@ function navigate(p) {
   refresh();
 }
 function bind() {
-  $$("[data-whatsapp]").forEach(b=>b.onclick=()=>editWhatsApp(Number(b.dataset.whatsapp)));
+  $$("[data-edit-member]").forEach(b=>b.onclick=()=>editMember(Number(b.dataset.editMember)));
+  if($('#calendar-channel')) $('#calendar-channel').onchange=e=>{calendarChannel=e.target.value;render();};
+  if($('#send-daily')) $('#send-daily').onclick=dispatchDaily;
   $$('[data-edit-channel]').forEach(b=>b.onclick=()=>openChannel(Number(b.dataset.editChannel)));
   $$('[data-delete-channel]').forEach(b=>b.onclick=()=>deleteChannel(Number(b.dataset.deleteChannel)));
   $$('[data-select-task]').forEach(b=>b.onchange=()=>{
@@ -1121,15 +1125,24 @@ async function copySelectedTasks() {
   }
 }
 
-function editWhatsApp(id) {
+function editMember(id) {
   const u=person(id);
-  modal('WhatsApp de '+esc(u.name),field('WhatsApp com país e DDD','whatsapp','tel',u.whatsapp || '', 'placeholder="5511999999999" maxlength="30"')+'<p class="subtitle">Esse número receberá alertas de tarefas atrasadas. Deixe vazio para desativar os alertas desta pessoa.</p>',async d=>{
-    await api('/users/'+id+'/whatsapp','PATCH',d);toast('WhatsApp atualizado.');
-  },'Salvar WhatsApp');
+  modal('Editar membro',field('Nome','name','text',u.name,'required maxlength="200"')+field('E-mail','email','email',u.email,'required maxlength="200"')+field('Cargo','role','text',u.role,'required maxlength="200"')+field('WhatsApp com país e DDD','whatsapp','tel',u.whatsapp || '', 'placeholder="5511999999999" maxlength="30"'),async d=>{
+    await api('/users/'+id,'PATCH',d);
+    if(user.id===id)user=await api('/me');
+    toast('Membro atualizado.');
+  },'Salvar membro');
 }
 function whatsappPanel() {
   const info=whatsappInfo;if(!info)return '';
   const label=!info.enabled ? 'Desativado' : !info.configured ? 'Configuração incompleta' : 'Configurado para envio automático';
-  const c=info.counts;
-  return `<section class="panel"><div class="panel-head"><div><h2>Alertas pelo WhatsApp</h2><p>${label} · Instância ${esc(info.instance)}</p></div></div><div class="panel-body"><p>Uma mensagem por responsável a cada ocorrência de atraso. Verificação a cada minuto, mesmo com o navegador fechado. Cadastre os números acima para habilitar cada pessoa.</p><p>Enviados à Evolution: <strong>${c.sent || 0}</strong> · Pendentes: <strong>${(c.pending || 0)+(c.retry || 0)+(c.sending || 0)}</strong> · Falhas: <strong>${c.failed || 0}</strong> · Sem confirmação: <strong>${c.uncertain || 0}</strong></p><small>Envios sem confirmação não são repetidos automaticamente; confira na Evolution. A configuração da chave e a ativação são feitas no ambiente da hospedagem.</small></div></section>`;
+  const metrics=c=>`<div class="notification-metrics"><span><strong>${c.sent || 0}</strong>Enviados à Evolution</span><span><strong>${(c.pending || 0)+(c.retry || 0)+(c.sending || 0)}</strong>Pendentes</span><span><strong>${c.failed || 0}</strong>Falhas</span><span><strong>${c.uncertain || 0}</strong>Sem confirmação</span></div>`;
+  return `<section class="panel whatsapp-panel"><div class="panel-head"><div><h2>Alertas pelo WhatsApp</h2><p>${label} · Resumo diário às 9h (São Paulo)</p></div><button id="send-daily" ${info.enabled && info.configured ? '' : 'disabled'}>Disparar mensagem</button></div><div class="panel-body"><h3>Resumo no grupo</h3>${metrics(info.group_counts || {})}<h3>Alertas individuais</h3>${metrics(info.counts)}<small>Envios sem confirmação não são repetidos automaticamente; confira na Evolution.</small></div></section>`;
+}
+function dispatchDaily() {
+  const requestId=crypto.randomUUID();
+  modal('Enviar resumo do dia','<p>Enviar ao grupo o resumo de hoje com as tarefas do dia e as atrasadas? Esse envio é adicional ao resumo automático das 9h.</p>',async()=>{
+    await api('/integrations/whatsapp/daily','POST',{request_id:requestId});
+    toast('Resumo na fila. O envio será processado em até cerca de um minuto.');
+  },'Enviar para o grupo');
 }

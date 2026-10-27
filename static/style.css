@@ -1589,3 +1589,11 @@ button.danger{color:#b83d4b;border-color:#efced2;background:#fff6f7}button.dange
 .status-donut>div { background:white; border-radius:50%; width:122px; height:122px; display:flex; flex-direction:column; justify-content:center; align-items:center; }
 .status-donut strong { font-size:32px; color:#102b55; }
 .status-legend { flex:1; min-width:160px; }.status-legend>div { display:flex; align-items:center; gap:8px; margin:10px 0; }.status-legend b { margin-left:auto; }
+
+.whatsapp-panel { margin-top:24px; }
+.notification-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; margin:16px 0 28px; }
+.notification-metrics span { padding:16px; background:#f4f7fc; border-radius:12px; font-size:12px; }
+.notification-metrics strong { display:block; color:#102b55; font-size:26px; margin-bottom:6px; }
+.calendar-event.posted { color:#126a3b; }
+.calendar-event.posted .channel-tag { color:#126a3b !important; background:#daf1e3 !important; --accent:#16834a !important; }
+@media(max-width:650px){ .notification-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }

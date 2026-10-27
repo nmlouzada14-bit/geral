@@ -151,9 +151,9 @@ O roteiro `tests/browser_deletion.py` valida edição/exclusão de canais e excl
 
 ### WhatsApp via Evolution API
 
-Integração direta com a Evolution v2; não depende de n8n. O Docker inicia o Gunicorn com `gunicorn.conf.py`, cujo hook inicia o verificador em segundo plano quando a integração está habilitada e configurada. Verifica tarefas existentes aproximadamente a cada minuto, mesmo sem navegador aberto. A geração de tarefas recorrentes continua vinculada à abertura dos períodos no calendário/lista.
+Integração direta com a Evolution v2; não depende de n8n. O Docker inicia o Gunicorn com `gunicorn.conf.py`, cujo hook inicia o verificador em segundo plano quando a integração está habilitada e configurada. Verifica tarefas existentes aproximadamente a cada minuto, mesmo sem navegador aberto. O resumo diário também gera as ocorrências do dia atual, mesmo se ninguém abrir o calendário. Abrir outros períodos continua gerando suas respectivas ocorrências.
 
-1. Implante a versão e cadastre os números em **Configurações → Equipe → Editar WhatsApp**. Use código do país + DDD + número, como `5511999999999`. Apenas o administrador pode consultar/editar números. Deixar vazio desativa alertas daquela pessoa.
+1. Implante a versão e cadastre os números em **Configurações → Equipe → Editar membro**. Use código do país + DDD + número, como `5511999999999`. Apenas o administrador pode consultar/editar números. Deixar vazio desativa alertas daquela pessoa.
 2. No EasyPanel, **contentos / web → Ambiente**, acrescente as linhas abaixo às variáveis existentes. Substitua o valor de `EVOLUTION_API_KEY` pela chave válida da Evolution diretamente no painel, sem publicar no Git/chat:
 
 ```dotenv
@@ -174,3 +174,15 @@ A fila fica no mesmo SQLite persistente, com chave única por tarefa, pessoa e o
 A migração v5 preserva dados e cria `DATA_DIR/backups/before-v5.sqlite` para bancos v4. Tarefas que já estavam em Atrasado antes da migração não recebem alertas acumulados; novas ocorrências são notificadas. Para interromper todos os envios, defina `WHATSAPP_NOTIFICATIONS_ENABLED=0` e implante. Nenhuma chave ou corpo de resposta da API é exibido nos logs/interface.
 
 Testes automatizados usam remetentes simulados, sem enviar WhatsApp real. Cobrem payload, erros, duplicação, reinício, concorrência, permissões e cancelamento. `tests/browser_whatsapp.py` valida cadastro de números e links diretos após login numa instância isolada vazia na porta 8012 (ou `TEST_URL`), com notificações desativadas.
+
+### Resumo diário no grupo e calendário
+
+- O calendário permite filtrar por canal em Dia, Semana e Mês. Em cada dia, Postado aparece em verde e depois das demais tarefas. A cor original do canal é preservada fora do calendário.
+- O grupo `120363426043140967@g.us` recebe diariamente às **9h de America/Sao_Paulo** o resumo `TAREFAS DO DIA - DD/MM` e `ATRASADAS`. O worker consulta o relógio a cada minuto; a chave persistente por data impede duplicação após reinício ou entre workers. Se o serviço iniciar depois das 9h sem ter gerado o resumo daquele dia, envia o resumo atual; não dispara resumos de dias anteriores.
+- Tarefas do dia incluem todos os status conforme a deadline de hoje. A seção Atrasadas inclui tarefas de outros dias ainda abertas com prazo vencido ou status Atrasado. Criado/Postado não aparecem como atrasadas. Uma tarefa de hoje aparece apenas na primeira seção. As atrasadas voltam no resumo de cada dia enquanto continuarem abertas, sem repetir o alerta individual da mesma ocorrência.
+- Conteúdos são agrupados pelo formato **e conjunto de responsáveis**. Lotes manuais sem formato usam o lote como agrupador. O formato `(3x)` indica três tarefas, nunca quantidade de canais. Todas as pessoas responsáveis são listadas; tarefas sem responsável mostram “Sem responsável”. Mensagens muito grandes são divididas em partes numeradas sem omitir tarefas; as partes são enviadas em ordem. Atrasos individuais mantêm a fila e a regra de envio único por ocorrência.
+- Em Configurações, **Disparar mensagem** confirma e enfileira um resumo atualizado para o grupo, adicional ao automático. É processado pelo worker em cerca de um minuto. Repetir uma requisição do mesmo clique não duplica a fila; confirmar outro envio cria um novo resumo. O botão exige integração ativa e chave configurada. As métricas separam mensagens do grupo e alertas individuais. Mantém a política de não repetir automaticamente respostas ambíguas da Evolution.
+- A edição de membro inclui nome, e-mail, cargo e WhatsApp, preservando senha, tarefas e permissões. O administrador pode trocar seu próprio e-mail sem perder acesso; o campo Cargo é descritivo e não concede administração. A migração v6 mantém a identidade administradora e cria a fila de resumos, com backup `before-v6.sqlite` para bancos v5.
+- A instância Evolution precisa participar do grupo e poder enviar mensagens nele. As variáveis existentes da integração continuam válidas; nenhum n8n ou novo segredo é necessário.
+
+`tests/browser_daily.py` valida filtro, ordenação/cor do calendário, edição de membro, espaçamento e fluxo do disparo manual em instância vazia na porta 8013 (ou `TEST_URL`). Respostas de envio são simuladas; os testes não enviam mensagens reais ao grupo.

@@ -10,7 +10,7 @@ class Workflow(unittest.TestCase):
     def setUp(self):
         self.client=m.app.test_client()
         with m.db() as c:
-            for table in ['task_requests','attachments','tasks','formats','channels','login_attempts']:
+            for table in ['digest_messages','digest_runs','task_requests','attachments','tasks','formats','channels','login_attempts']:
                 c.execute('DELETE FROM '+table)
             c.execute('DELETE FROM users WHERE email!=?',(m.ADMIN,))
             c.execute('UPDATE users SET password=?,must_change=1',(m.generate_password_hash('Initial-Test-2026!'),))
@@ -155,6 +155,64 @@ class Workflow(unittest.TestCase):
                 self.assertEqual(send_message(config,'5511999999999','Test')[0],state)
             opener.open.side_effect=URLError('timeout')
             self.assertEqual(send_message(config,'5511999999999','Test')[0],'uncertain')
+
+    def test_daily_group_schedule_grouping_manual_and_repeat(self):
+        from unittest.mock import patch
+        from notifications import process_daily,configuration
+        from datetime import datetime,time as daytime
+        from zoneinfo import ZoneInfo
+        day=m.today();ch=self.channel()
+        self.call('post','/formats',{'name':'Corte Vlog','channel_ids':[ch],'responsible_ids':[1],'frequency':{str(day.weekday()):3},'active_from':str(day)},201)
+        late=self.task(title='Atrasada recorrente',deadline=str(day-timedelta(days=1)),responsible_ids=[1])[0]
+        self.task(title='Já criado antigo',deadline=str(day-timedelta(days=1)),status='Criado')
+        self.task(title='Já postado hoje',status='Postado')
+        calls=[]
+        def sender(config,number,body):calls.append((number,body));return 'sent','id'
+        moment=lambda hour:datetime.combine(day,daytime(hour),ZoneInfo('America/Sao_Paulo'))
+        with patch.dict(os.environ,{'WHATSAPP_NOTIFICATIONS_ENABLED':'1','EVOLUTION_API_KEY':'test-key'}):
+            process_daily(sender,moment(8));self.assertFalse(calls)
+            process_daily(sender,moment(9));process_daily(sender,moment(10));m.init();process_daily(sender,moment(12))
+            self.assertEqual(len(calls),1)
+            self.assertEqual(calls[0][0],'120363426043140967@g.us')
+            self.assertIn('✅ *TAREFAS DO DIA - '+day.strftime('%d/%m')+'*',calls[0][1])
+            self.assertIn('• Corte Vlog (3x) - Nícolas Louzada',calls[0][1])
+            self.assertIn('Já postado hoje',calls[0][1]);self.assertNotIn('Já criado antigo',calls[0][1])
+            self.assertIn('🚨 *ATRASADAS*',calls[0][1]);self.assertIn('Atrasada recorrente',calls[0][1])
+            token={'request_id':'manual-request-123456'}
+            self.call('post','/integrations/whatsapp/daily',token,202)
+            self.call('post','/integrations/whatsapp/daily',token,202)
+            process_daily(sender,moment(12));self.assertEqual(len(calls),2)
+            tomorrow=day+timedelta(days=1)
+            process_daily(sender,datetime.combine(tomorrow,daytime(9),ZoneInfo('America/Sao_Paulo')))
+            self.assertIn('Atrasada recorrente',calls[-1][1])
+            task=self.call('get',f'/tasks/{late}')
+            self.call('patch',f'/tasks/{late}',{'version':task['version'],'status':'Criado'})
+            nextday=day+timedelta(days=2)
+            process_daily(sender,datetime.combine(nextday,daytime(9),ZoneInfo('America/Sao_Paulo')))
+            self.assertNotIn('Atrasada recorrente',calls[-1][1])
+        self.call('post','/integrations/whatsapp/daily',{'request_id':'manual-request-123456'},401,client=m.app.test_client())
+
+    def test_edit_member_preserves_privileges_and_task_links(self):
+        self.call('post','/users',{'name':'Editor','email':'editor@example.com','role':'Editor'},201)
+        uid=next(u['id'] for u in self.state()['users'] if u['email']=='editor@example.com')
+        tid=self.task(responsible_ids=[uid])[0]
+        self.call('patch',f'/users/{uid}',{'name':'Novo nome','email':'novo@example.com','role':'Administrador','whatsapp':'5511999999999'})
+        self.assertEqual(self.call('get',f'/tasks/{tid}')['responsible_ids'],[uid])
+        member=m.app.test_client();self.login(member,'novo@example.com')
+        self.call('post','/password',{'current':'Initial-Test-2026!','password':'New-Member-2026!'},client=member)
+        self.call('patch','/users/1',{'name':'Intruso','email':'x@example.com','role':'Administrador'},403,client=member)
+        self.call('post','/integrations/whatsapp/daily',{'request_id':'manual-request-123456'},403,client=member)
+        self.call('patch',f'/users/{uid}',{'name':'X','email':m.ADMIN,'role':'Editor'},409)
+        self.call('patch',f'/users/{uid}',{'name':'X','email':'invalid','role':'Editor'},400)
+        # Administrator identity survives an email change and server restart.
+        self.call('patch','/users/1',{'name':'Nícolas','email':'admin-new@example.com','role':'Owner','whatsapp':''})
+        try:
+            m.init()
+            self.assertTrue(self.call('get','/me')['is_admin'])
+            self.call('get','/integrations/whatsapp')
+            with m.db() as c:self.assertEqual(c.execute('SELECT count(*) FROM users WHERE is_admin=1').fetchone()[0],1)
+        finally:
+            with m.db() as c:c.execute('UPDATE users SET email=?,name=? WHERE id=1',(m.ADMIN,'Nícolas Louzada'))
 
     def test_channel_edit_delete_preserves_history_and_pauses_orphans(self):
         ch=self.channel()
