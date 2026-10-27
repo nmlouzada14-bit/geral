@@ -36,6 +36,31 @@ class Workflow(unittest.TestCase):
     def task(self,**extra):
         return self.call('post','/tasks',{'title':'Entrega','deadline':str(m.today()),'description':'Briefing https://example.com','status':'Pendente','quantity':1,**extra},201)['ids']
 
+    def test_bulk_status_atomicity_dates_and_validation(self):
+        ids=self.task(quantity=2)
+        overdue=self.task(deadline=str(m.today()-timedelta(days=1)))[0]
+        selected=[{'id':tid,'version':1} for tid in ids+[overdue]]
+        payload={'tasks':selected,'status':'Criado'}
+        self.call('post','/tasks/bulk-status',payload,401,client=m.app.test_client())
+        for items in [[],[{'id':True,'version':1}],selected*2,selected*200]:
+            self.call('post','/tasks/bulk-status',{'tasks':items,'status':'Criado'},400)
+        self.call('post','/tasks/bulk-status',{'tasks':selected,'status':'Agendado'},400)
+        result=self.call('post','/tasks/bulk-status',payload)
+        self.assertEqual(result['updated'],3)
+        first=self.call('get',f'/tasks/{ids[0]}');stamp=first['completed_at']
+        self.assertIsNotNone(stamp)
+        self.call('patch',f'/tasks/{ids[1]}',{'version':2,'status':'Postado'})
+        self.call('post','/tasks/bulk-status',{'tasks':[{'id':tid,'version':2} for tid in ids],'status':'Revisão'},409)
+        self.assertEqual(self.call('get',f'/tasks/{ids[0]}')['status'],'Criado')
+        self.call('post','/tasks/bulk-status',{'tasks':[{'id':ids[0],'version':2}],'status':'Postado'})
+        self.assertEqual(self.call('get',f'/tasks/{ids[0]}')['completed_at'],stamp)
+        result=self.call('post','/tasks/bulk-status',{'tasks':[{'id':overdue,'version':2},{'id':ids[0],'version':3}],'status':'Em andamento'})
+        self.assertEqual(result['overdue'],1)
+        self.assertEqual(self.call('get',f'/tasks/{overdue}')['status'],'Atrasado')
+        self.assertIsNone(self.call('get',f'/tasks/{ids[0]}')['completed_at'])
+        self.assertEqual(self.call('get',f'/tasks/{ids[0]}')['status'],'Em andamento')
+        self.assertEqual(self.call('get',f'/tasks/{ids[1]}')['status'],'Postado')
+
     def test_channel_edit_delete_preserves_history_and_pauses_orphans(self):
         ch=self.channel()
         self.call('post','/channels',{'name':'YouTube','url':'https://youtube.com/test','color':'#123456'},201)

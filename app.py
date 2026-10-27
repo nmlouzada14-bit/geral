@@ -585,6 +585,35 @@ def update_task(id):
         c.execute('UPDATE tasks SET completed_at=? WHERE id=?',(completed,id))
     return {'ok':True}
 
+@app.post('/api/tasks/bulk-status')
+@auth()
+def bulk_status():
+    d=request.get_json(); items=d.get('tasks');status=d.get('status')
+    if status not in STATES: abort(400,'Status inválido.')
+    if not isinstance(items,list) or not 1<=len(items)<=500: abort(400,'Selecione entre 1 e 500 tarefas.')
+    if any(not isinstance(t,dict) or type(t.get('id')) is not int or t['id']<=0 or type(t.get('version')) is not int or t['version']<=0 for t in items):
+        abort(400,'Seleção de tarefas inválida.')
+    if len({t['id'] for t in items})!=len(items): abort(400,'Há tarefas repetidas na seleção.')
+    adjusted=0;changed=0
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        rows=[]
+        for item in items:
+            row=c.execute('SELECT * FROM tasks WHERE id=?',(item['id'],)).fetchone()
+            if not row or row['version']!=item['version']:
+                abort(409,'Uma tarefa foi alterada ou excluída. Feche esta janela, atualize a lista e selecione novamente. Nenhuma alteração de status deste lote foi aplicada.')
+            rows.append(row)
+        timestamp=now()
+        for row in rows:
+            target='Atrasado' if row['deadline']<str(today()) and status not in DONE else status
+            adjusted+=target!=status
+            if row['status']==target: continue
+            completed=(row['completed_at'] if row['status'] in DONE else timestamp) if target in DONE else None
+            c.execute('UPDATE tasks SET status=?,completed_at=?,version=version+1 WHERE id=?',(target,completed,row['id']))
+            changed+=1
+    return {'ok':True,'updated':changed,'overdue':adjusted}
+
+
 def remove_tasks(ids):
     if not isinstance(ids,list) or not ids or len(ids)>500 or any(type(id) is not int or id<=0 for id in ids):
         abort(400,'Selecione entre 1 e 500 tarefas válidas.')

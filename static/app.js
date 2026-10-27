@@ -267,7 +267,7 @@ function table(tasks, grouped = false) {
     rows += items
       .map(
         (t) =>
-          `<tr data-task="${t.id}" tabindex="0" role="button" aria-label="Abrir ${esc(t.title)}">${selectable ? `<td><input type="checkbox" data-select-task="${t.id}" aria-label="Selecionar ${esc(t.title)}" ${selectedTasks.has(t.id) ? "checked" : ""}></td>` : ""}<td><div class="task-title"><span class="dot" style="--accent:${taskColor(t)}"></span>${esc(t.title)}<small class="task-origin">#${t.id} · ${t.slot?"Automática":"Avulsa"}</small></div></td><td>${channelTag(t)}</td><td>${assignedPeople(t)}</td><td>${fmt(t.deadline)}${t.overdue ? '<span class="late">Atrasada</span>' : ""}</td><td>${badge(t.status)}</td></tr>`,
+          `<tr data-task="${t.id}" tabindex="0" role="button" aria-label="Abrir ${esc(t.title)}">${selectable ? `<td><input type="checkbox" data-select-task="${t.id}" aria-label="Selecionar ${esc(t.title)}" ${selectedTasks.has(t.id) ? "checked" : ""}></td>` : ""}<td><div class="task-title"><span class="dot" style="--accent:${taskColor(t)}"></span>${esc(t.title)}</div></td><td>${channelTag(t)}</td><td>${assignedPeople(t)}</td><td>${fmt(t.deadline)}${t.overdue ? '<span class="late">Atrasada</span>' : ""}</td><td>${badge(t.status)}</td></tr>`,
       )
       .join("");
   }
@@ -350,7 +350,7 @@ function tasksPage() {
     periodControl() +
     `<div class="task-tools"><div class="segmented"><button data-view="list" class="${view === "list" ? "selected" : ""}">☷ Lista</button><button data-view="kanban" class="${view === "kanban" ? "selected" : ""}">▥ Kanban</button></div><div class="filters"><input id="search" aria-label="Buscar tarefas" placeholder="Buscar tarefa…" value="${esc(search)}"><select id="filter-status" aria-label="Filtrar status"><option value="">Todos os status</option>${states.map((s) => `<option ${filterStatus === s ? "selected" : ""}>${s}</option>`).join("")}</select><select id="filter-person" aria-label="Filtrar responsável"><option value="">Toda a equipe</option>${data.users.map((u) => `<option value="${u.id}" ${filterPerson === String(u.id) ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></div></div>${
       view === "list"
-        ? `<div class="toolbar"><small>${tasks.length} entregas no período</small><button class="danger" id="delete-selected" ${selectedTasks.size ? "" : "disabled"}>Excluir selecionadas (${selectedTasks.size})</button><label class="checkbox"><input id="group" type="checkbox" ${group ? "checked" : ""}>Agrupar por formato e semana</label></div><section class="panel">${active.length ? table(active, group) : empty("Nenhuma demanda em aberto neste filtro.", "As entregas concluídas ficam no quadro abaixo.")}</section><details class="archive-box panel" id="archive-box" ${archiveOpen || doneStates.includes(filterStatus) ? "open" : ""}><summary>Criadas / arquivadas <span class="badge">${archived.length}</span><small>Criados e postados · período selecionado</small></summary>${archived.length ? table(archived, group) : empty("Nenhuma entrega arquivada neste filtro.", "Ao marcar uma tarefa como Criado ou Postado, ela aparecerá aqui.")}</details>`
+        ? `<div class="toolbar"><small>${tasks.length} entregas no período</small><button id="status-selected" ${selectedTasks.size ? "" : "disabled"}>Alterar status (${selectedTasks.size})</button><button class="danger" id="delete-selected" ${selectedTasks.size ? "" : "disabled"}>Excluir selecionadas (${selectedTasks.size})</button><button class="ghost" id="copy-selected" ${selectedTasks.size ? "" : "disabled"}>Copiar tarefas</button><label class="checkbox"><input id="group" type="checkbox" ${group ? "checked" : ""}>Agrupar por formato e semana</label></div><section class="panel">${active.length ? table(active, group) : empty("Nenhuma demanda em aberto neste filtro.", "As entregas concluídas ficam no quadro abaixo.")}</section><details class="archive-box panel" id="archive-box" ${archiveOpen || doneStates.includes(filterStatus) ? "open" : ""}><summary>Criadas / arquivadas <span class="badge">${archived.length}</span><small>Criados e postados · período selecionado</small></summary>${archived.length ? table(archived, group) : empty("Nenhuma entrega arquivada neste filtro.", "Ao marcar uma tarefa como Criado ou Postado, ela aparecerá aqui.")}</details>`
         : `<div class="kanban">${states
             .map((s, i) => {
               const items = tasks.filter((t) => t.status === s);
@@ -512,7 +512,7 @@ async function openTask(id) {
       states.map((s) => ({ id: s, name: s })),
       t?.status || "Pendente",
       true,
-    )}${editing ? `<div class="field"><label>Identificação</label><div class="notice" style="margin:0">Tarefa #${t.id}${t.slot ? " · Linha editorial" : ""}</div></div>` : field("Quantidade total de tarefas", "quantity", "number", 1, 'min="1" max="100" required')}${frequencyInputs(freq)}${!editing?'<div class="full notice" id="creation-summary" aria-live="polite"></div>':""}<div class="full"><p class="subtitle">${editing ? "Esta edição altera somente esta entrega. A frequência original fica registrada para consulta." : "Com frequência, a quantidade total é distribuída nos próximos dias selecionados, a partir da deadline. Sem frequência, todas recebem a mesma deadline."}</p></div><div class="full field" style="margin-top:20px"><label for="file">Anexos · até 20 MB por arquivo</label><input id="file" type="file" multiple>${editing ? `<div class="attachments">${t.attachments.map((a) => `<a href="/api/attachments/${a.id}" target="_blank" rel="noopener">↗ ${esc(a.name)}</a>`).join("")}</div>` : ""}<small>${editing ? "Arquivos disponíveis para todo o time." : "Anexos serão adicionados a cada tarefa criada."}</small></div></div>`,
+    )}${editing ? "" : field("Quantidade total de tarefas", "quantity", "number", 1, 'min="1" max="100" required')}${frequencyInputs(freq)}${!editing?'<div class="full notice" id="creation-summary" aria-live="polite"></div>':""}<div class="full"><p class="subtitle">${editing ? "Esta edição altera somente esta entrega. A frequência original fica registrada para consulta." : "Com frequência, a quantidade total é distribuída nos próximos dias selecionados, a partir da deadline. Sem frequência, todas recebem a mesma deadline."}</p></div><div class="full field" style="margin-top:20px"><label for="file">Anexos · até 20 MB por arquivo</label><input id="file" type="file" multiple>${editing ? `<div class="attachments">${t.attachments.map((a) => `<a href="/api/attachments/${a.id}" target="_blank" rel="noopener">↗ ${esc(a.name)}</a>`).join("")}</div>` : ""}<small>${editing ? "Arquivos disponíveis para todo o time." : "Anexos serão adicionados a cada tarefa criada."}</small></div></div>`,
     async (d) => {
       d.frequency = getFreq(d);
       d.channel_ids = selectedChannels();
@@ -662,6 +662,8 @@ function bind() {
     if(b.checked && new Set([...selectedTasks,...ids]).size>500) { b.checked=false;toast('Selecione até 500 tarefas por vez.');return; }
     ids.forEach(id=>b.checked ? selectedTasks.add(id) : selectedTasks.delete(id));render();
   });
+  if($('#copy-selected')) $('#copy-selected').onclick=copySelectedTasks;
+  if($('#status-selected')) $('#status-selected').onclick=()=>bulkStatus([...selectedTasks]);
   if($('#delete-selected')) $('#delete-selected').onclick=()=>deleteTasks([...selectedTasks]);
 
   $$('[data-delete-format]').forEach(b=>b.onclick=()=>deleteFormat(Number(b.dataset.deleteFormat)));
@@ -1074,7 +1076,7 @@ function deleteChannel(id) {
 }
 function deleteTasks(ids) {
   if(!ids.length)return;
-  modal(ids.length===1 ? 'Excluir tarefa' : 'Excluir tarefas',`<p>Excluir permanentemente <strong>${ids.length} tarefa(s)</strong>?</p><ul class="delete-preview">${ids.map(id=>`<li>#${id} · ${esc(data.tasks.find(t=>t.id===id)?.title || 'Tarefa')}</li>`).join('')}</ul><div class="notice">Os comentários e anexos dessas tarefas também serão excluídos. Entregas automáticas excluídas não serão recriadas ao abrir o calendário. As próximas entregas do formato continuam normalmente.</div>`,async()=>{
+  modal(ids.length===1 ? 'Excluir tarefa' : 'Excluir tarefas',`<p>Excluir permanentemente <strong>${ids.length} tarefa(s)</strong>?</p><ul class="delete-preview">${ids.map(id=>`<li>${esc(data.tasks.find(t=>t.id===id)?.title || 'Tarefa')} · ${fmt(data.tasks.find(t=>t.id===id)?.deadline)}</li>`).join('')}</ul><div class="notice">Os comentários e anexos dessas tarefas também serão excluídos. Entregas automáticas excluídas não serão recriadas ao abrir o calendário. As próximas entregas do formato continuam normalmente.</div>`,async()=>{
     const result=ids.length===1 ? await api('/tasks/'+ids[0],'DELETE') : await api('/tasks/bulk-delete','POST',{ids});
     ids.forEach(id=>selectedTasks.delete(id));toast(`${result.deleted} tarefa(s) excluída(s).`);
   },'Confirmar exclusão');
@@ -1086,4 +1088,28 @@ function responsiblesPicker(selected=[]) {
 }
 function selectedResponsibles() {
   return $$('#modal [name="responsibles"]:checked').map(input=>Number(input.value));
+}
+
+function bulkStatus(ids) {
+  if(!ids.length)return;
+  const tasks=ids.map(id=>data.tasks.find(t=>t.id===id));
+  if(tasks.some(t=>!t)){toast('Atualize a lista e selecione novamente.');return;}
+  modal('Alterar status em lote',`<p>Aplicar um status a <strong>${tasks.length} tarefa(s)</strong>:</p><ul class="delete-preview">${tasks.map(t=>`<li>${esc(t.title)} · ${fmt(t.deadline)}</li>`).join('')}</ul>${selectField('Novo status','status',states.map(s=>({id:s,name:s})),null,true)}<div class="notice">Tarefas com deadline vencida ficam em Atrasado, exceto quando marcadas como Criado ou Postado. Criado e Postado entram no quadro de arquivadas.</div>`,async d=>{
+    const result=await api('/tasks/bulk-status','POST',{status:d.status,tasks:tasks.map(t=>({id:t.id,version:t.version}))});
+    ids.forEach(id=>selectedTasks.delete(id));
+    toast(`${result.updated} tarefa(s) atualizada(s).`+(result.overdue ? ` ${result.overdue} tarefa(s) com prazo vencido ficam em Atrasado.` : ''));
+  },'Aplicar status');
+}
+
+async function copySelectedTasks() {
+  const tasks=filtered().filter(t=>selectedTasks.has(t.id));
+  if(!tasks.length)return;
+  const content=tasks.map(t=>`${t.title.replace(/\s+/g,' ').trim()} - ${t.deadline.slice(8,10)}/${t.deadline.slice(5,7)}`).join('\n');
+  try {
+    await navigator.clipboard.writeText(content);
+    toast(`${tasks.length} tarefa(s) copiada(s).`);
+  } catch {
+    modal('Copiar tarefas',`<p>O navegador não permitiu copiar automaticamente. Copie o texto selecionado abaixo.</p><textarea id="copy-content" aria-label="Tarefas para copiar" readonly rows="10">${esc(content)}</textarea>`,async()=>{},'Fechar');
+    $('#copy-content').focus();$('#copy-content').select();
+  }
 }

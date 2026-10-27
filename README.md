@@ -143,3 +143,8 @@ O roteiro `tests/browser_deletion.py` valida edição/exclusão de canais e excl
 - **Insights visuais:** gráficos de distribuição por status, planejadas x entregues, produção por deadline, prazos, pessoas e canais. Tela e PDF exibem agregados, sem detalhamento de tarefas. A série por deadline representa o estado atual das entregas daquele dia/semana, não uma série histórica de conclusões.
 
 `tests/browser_insights.py` verifica estado vazio, gráficos, exportação PDF, nomes de status e layout mobile em instância isolada vazia na porta 8009 (ou `TEST_URL`).
+
+- **Status em lote:** na Lista, selecione até 500 tarefas e clique em Alterar status. A confirmação mostra as tarefas e permite escolher o novo status. O lote é validado antes de ser aplicado: se uma tarefa foi alterada ou excluída, atualize a seleção. Mantém a regra de atraso e as datas de conclusão (Criado/Postado); reabrir limpa a data de conclusão. Também funciona com tarefas arquivadas.
+- **Copiar tarefas:** botão discreto ao lado de Excluir selecionadas. Copia apenas a seleção atual, na ordem da lista, uma tarefa por linha no formato `Título - DD/MM`, usando a deadline. Se o navegador bloquear a área de transferência, apresenta o texto selecionado para cópia manual. A identificação numérica não aparece mais na lista ou no modal da tarefa.
+
+`tests/browser_bulk_status.py` valida seleção, cópia, cancelamento, status em lote e reabertura de arquivadas em instância isolada vazia (porta 8010 ou `TEST_URL`).
