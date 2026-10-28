@@ -537,6 +537,14 @@ def get_comments(id):
         return {'comments':comments}
 
 
+@app.get('/api/mentions')
+@auth()
+def mentions_inbox():
+    with db() as c:
+        rows=[dict(r) for r in c.execute('SELECT m.comment_id,c.task_id,c.created_at,t.title,u.name AS author FROM comment_mentions m JOIN comments c ON c.id=m.comment_id JOIN tasks t ON t.id=c.task_id JOIN users u ON u.id=c.author_id WHERE m.user_id=? AND m.read_at IS NULL ORDER BY c.id DESC',(session['uid'],))]
+    return {'mentions':rows}
+
+
 @app.post('/api/tasks/<int:id>/comments')
 @auth()
 def add_comment(id):
@@ -549,8 +557,15 @@ def add_comment(id):
         for uid in ids:
             name=c.execute('SELECT name FROM users WHERE id=?',(uid,)).fetchone()[0]
             if '@'+name not in body: abort(400,'Selecione a pessoa mencionada no comentário.')
+        # Recognize full typed names as well as selections; ambiguous names require a selection.
+        people=c.execute('SELECT id,name FROM users').fetchall()
+        for person in people:
+            if sum(p['name'].casefold()==person['name'].casefold() for p in people)==1 and re.search(r'(?<!\w)@'+re.escape(person['name'])+r'(?!\w)',body,re.IGNORECASE):
+                ids.append(person['id'])
+        ids=sorted(set(ids))
+        if len(ids)>50: abort(400,'Use até 50 menções por comentário.')
         cur=c.execute('INSERT INTO comments(task_id,author_id,body,created_at) VALUES(?,?,?,?)',(id,session['uid'],body,now()))
-        c.executemany('INSERT INTO comment_mentions(comment_id,user_id,read_at) VALUES(?,?,?)',[(cur.lastrowid,uid,now() if uid==session['uid'] else None) for uid in ids])
+        c.executemany('INSERT INTO comment_mentions(comment_id,user_id,read_at) VALUES(?,?,?)',[(cur.lastrowid,uid,None) for uid in ids])
     return {'ok':True},201
 
 

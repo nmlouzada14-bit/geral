@@ -476,7 +476,8 @@ class Workflow(unittest.TestCase):
         self.assertIn('YouTube',content)
         self.assertIn('Distribuição por status',content)
         self.assertIn('Produção por deadline',content)
-        self.assertGreaterEqual(len(pdf.pages),2)
+        self.assertEqual(len(pdf.pages),3)
+        self.assertTrue(all(p.mediabox.width>p.mediabox.height for p in pdf.pages))
         response.close()
         self.assertEqual(m.app.test_client().get('/api/insights.pdf'+query).status_code,401)
         # Editing a finished task preserves its completion timestamp; reopening restores it to active work.
@@ -489,6 +490,33 @@ class Workflow(unittest.TestCase):
         self.call('patch',f"/tasks/{task['id']}",{'version':3,'status':'Em andamento'})
         self.assertFalse(self.call('get',f"/tasks/{task['id']}")['archived'])
         self.assertIsNone(self.call('get',f"/tasks/{task['id']}")['completed_at'])
+
+    def test_presentation_pdf_paginates_people_and_channels(self):
+        from reports import summarize,make_pdf
+        from pypdf import PdfReader
+        day=m.today()
+        users=[{'id':i,'name':f'Membro número {i}'} for i in range(1,14)]
+        channels=[{'id':i,'name':f'Canal número {i}'} for i in range(1,14)]
+        tasks=[{'id':i,'title':'Não exportar este título','status':'Criado','deadline':str(day),'responsible_ids':[i],'channel_ids':[i],'completed_at':None,'overdue':False} for i in range(1,14)]
+        r=summarize(tasks,users,channels,day,day)
+        pdf=PdfReader(make_pdf(r,tasks,users,channels,m.now()))
+        self.assertEqual(len(pdf.pages),5)
+        content=''.join(p.extract_text() for p in pdf.pages)
+        self.assertIn('Membro número 13',content);self.assertIn('Canal número 13',content)
+        self.assertNotIn('Não exportar este título',content)
+
+    def test_self_and_typed_mentions_stay_unread_until_explicit_read(self):
+        tid=self.task()[0]
+        self.call('post',f'/tasks/{tid}/comments',{'body':'@Nícolas Louzada conferir','mentions':[1]},201)
+        self.call('post',f'/tasks/{tid}/comments',{'body':'@Nícolas Louzada comentário digitado'},201)
+        self.assertEqual(len(self.call('get','/mentions')['mentions']),2)
+        self.call('get',f'/tasks/{tid}/comments')
+        self.assertEqual(len(self.call('get','/mentions')['mentions']),2)
+        self.call('post',f'/tasks/{tid}/comments',{'body':'@Nícolas LouzadaExtra não é uma menção'},201)
+        self.assertEqual(len(self.call('get','/mentions')['mentions']),2)
+        self.call('post',f'/tasks/{tid}/mentions/read')
+        self.assertEqual(self.call('get','/mentions')['mentions'],[])
+        self.call('get','/mentions',expected=401,client=m.app.test_client())
 
     def test_comments_mentions_authorship_and_read_scope(self):
         self.call('post','/users',{'name':'Paloma Teste','email':'paloma@example.com','role':'Social media'},201)

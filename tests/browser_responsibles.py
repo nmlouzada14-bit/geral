@@ -51,7 +51,7 @@ with sync_playwright() as pw:
     expect(page.get_by_role('heading',name='Insights',exact=True)).to_be_visible()
     expect(page.locator('body')).to_contain_text('Parceiro Teste')
     with page.expect_download() as info:
-        page.get_by_role('button',name='Exportar PDF',exact=False).click()
+        page.get_by_role('button',name='Exportar apresentação PDF',exact=False).click()
     assert info.value.failure() is None
     assert not errors,errors
     browser.close()

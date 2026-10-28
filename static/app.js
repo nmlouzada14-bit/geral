@@ -892,19 +892,33 @@ function insightBars(title, rows, paired=false, note='') {
   const max=Math.max(1,...rows.flatMap(r=>[r.planned,r.delivered || 0]));
   return `<section class="panel insight-chart"><div class="panel-head"><div><h2>${esc(title)}</h2><p>${esc(note)}</p></div></div><div class="panel-body">${paired ? '<p class="chart-legend"><span>■ Planejadas</span><strong>■ Entregues</strong></p>' : ''}${rows.length ? rows.map(r=>`<div class="metric-bars"><div class="metric-label">${esc(r.name)}</div><div class="metric-track"><span style="width:${100*r.planned/max}%;background:${paired?'#b6cff8':'#3b82f6'}"></span><b>${r.planned}</b></div>${paired ? `<div class="metric-track"><span style="width:${100*r.delivered/max}%"></span><b>${r.delivered}</b></div>` : ''}</div>`).join('') : '<p class="muted">Sem demandas no período.</p>'}</div></section>`;
 }
+function insightTrend(rows) {
+  const max=Math.max(1,...rows.map(d=>d.planned)),w=760,h=170;
+  const points=key=>rows.map((d,i)=>[40+(rows.length>1 ? i/(rows.length-1)*w : w/2),20+h*(1-d[key]/max)]);
+  const line=(key,color)=>{
+    const pts=points(key),coordinates=pts.map(p=>p.join(',')).join(' ');
+    return `${pts.length>1 ? `<polygon points="${pts[0][0]},190 ${coordinates} ${pts.at(-1)[0]},190" fill="${color}" opacity=".10"/><polyline points="${coordinates}" fill="none" stroke="${color}" stroke-width="3"/>` : ''}${pts.map(([x,y],i)=>`<circle cx="${x}" cy="${y}" r="4" fill="${color}"><title>${esc(rows[i].name)}: ${rows[i][key]} ${key==='planned' ? 'planejadas' : 'entregues'}</title></circle>`).join('')}`;
+  };
+  return `<svg class="insight-trend" viewBox="0 0 840 230" role="img" aria-label="Produção por deadline. ${esc(rows.map(d=>d.name+': '+d.planned+' planejadas, '+d.delivered+' entregues').join('; '))}">${[0,.5,1].map(n=>`<line x1="40" x2="800" y1="${20+h*(1-n)}" y2="${20+h*(1-n)}" stroke="#e8edf6"/><text x="4" y="${24+h*(1-n)}">${Math.round(max*n*10)/10}</text>`).join('')}${line('planned','#b4ccf6')}${line('delivered','#3b82f6')}${rows.map((d,i)=>i%Math.max(1,Math.ceil(rows.length/7))===0 || i===rows.length-1 ? `<text x="${40+(rows.length>1 ? i/(rows.length-1)*w : w/2)}" y="218" text-anchor="middle">${esc(d.name)}</text>` : '').join('')}</svg>`;
+}
+function insightGauge(value,total,label,color,display) {
+  const pct=total ? Math.min(100,100*value/total) : 0;
+  return `<div class="mini-gauge" role="img" aria-label="${esc(label)}: ${value} de ${total}" style="background:conic-gradient(${color} ${pct}%,#e9eff8 0)"><div><strong>${esc(display)}</strong></div></div>`;
+}
 function insightsPage() {
-  const r=insightReport;
-  if(!r)return empty('Carregando relatório…','');
-  const metrics=[['Planejadas',r.planned],['Entregues',r.delivered],['Em aberto',r.pending],['Postadas',r.posted],['Atrasadas',r.overdue],['Conclusão',r.rate+'%']];
-  let angle=0;
-  const segments=states.map((s,i)=>{const begin=angle;angle+=r.planned ? (r.statuses[s] || 0)*360/r.planned : 0;return `${colors[i]} ${begin}deg ${angle}deg`;});
-  const donut=`<section class="panel insight-chart"><div class="panel-head"><h2>Distribuição por status</h2></div><div class="panel-body status-chart"><div class="status-donut" role="img" aria-label="${esc(states.map(s=>s+': '+(r.statuses[s] || 0)).join(', '))}" style="background:${r.planned ? 'conic-gradient('+segments.join(',')+')' : '#e7effd'}"><div><strong>${r.planned}</strong><small>conteúdos</small></div></div><div class="status-legend">${states.map((s,i)=>`<div><span class="dot" style="--accent:${colors[i]}"></span>${esc(s)}<b>${r.statuses[s] || 0}</b></div>`).join('')}</div></div></section>`;
-  return heading('Insights','Um resumo visual da produção e das entregas.','<button class="primary" data-action="export-pdf">↓ Exportar PDF</button>','RELATÓRIO DE PRODUÇÃO')+periodControl()+
-    `<div class="notice">Filtro pela deadline. Entregues = Criado + Postado. Cada conteúdo conta uma vez no total, mesmo com vários canais ou responsáveis.</div><div class="insight-stats">${metrics.map(([label,n])=>`<div class="stat"><div class="stat-top">${label}</div><div class="stat-num">${n}</div></div>`).join('')}</div><div class="grid-two">${donut}${deliveryPanel()}</div>`+
-    insightBars('Produção por deadline',r.daily,true,'Agrupada por dia ou semana, conforme o intervalo selecionado.')+
-    `<div class="grid-two">${insightBars('Prazos das entregas',[{name:'No prazo',planned:r.on_time},{name:'Após o prazo',planned:r.late_delivery},{name:'Sem data histórica',planned:r.undated_delivery}],false,r.on_time_rate===null ? 'Sem datas de conclusão suficientes.' : r.on_time_rate+'% das entregas com data registrada foram concluídas no prazo.')}${insightBars('Por pessoa',r.people,true,'Uma tarefa compartilhada aparece para cada responsável.')}</div>`+
-    insightBars('Por canal',r.channels,true,'Um conteúdo pode aparecer em vários canais. A soma por canal pode superar o total.')+
-    '<p class="subtitle">Relatório de produção. Métricas sociais de visualizações e engajamento ainda não estão conectadas.</p>';
+  const r=insightReport;if(!r)return empty('Carregando relatório…','');
+  const created=r.statuses.Criado || 0;
+  const metrics=[['Planejadas',r.planned,'Conteúdos no período'],['Entregues',r.delivered,'Criado + Postado'],['Criadas / a postar',created,'Prontas para publicação'],['Postadas',r.posted,'Já publicadas'],['Em aberto',r.pending,'Ainda em produção'],['Atrasadas',r.overdue,'Atenção aos prazos']];
+  let angle=0;const segments=states.map((s,i)=>{const from=angle;angle+=r.planned ? (r.statuses[s] || 0)*360/r.planned : 0;return `${colors[i]} ${from}deg ${angle}deg`;});
+  const block=(title,sub,body,cls='')=>`<section class="panel insight-chart ${cls}"><div class="panel-head"><div><h2>${title}</h2><p>${sub}</p></div></div><div class="panel-body">${body}</div></section>`;
+  const donut=block('Distribuição por status','O retrato da operação',`<div class="status-chart"><div class="status-donut" role="img" aria-label="${esc(states.map(s=>s+': '+(r.statuses[s]||0)).join(', '))}" style="background:${r.planned ? 'conic-gradient('+segments.join(',')+')' : '#e7effd'}"><div><strong>${r.planned}</strong><small>conteúdos</small></div></div><div class="status-legend">${states.map((s,i)=>`<div><span class="dot" style="--accent:${colors[i]}"></span>${s}<b>${r.statuses[s]||0}</b></div>`).join('')}</div></div>`);
+  const pipeline=block('Da criação à publicação','Encontre o próximo passo da produção',`<div class="publication-flow">${[['Em produção',r.pending,'#3b82f6'],['Prontos para postar',created,'#18aa82'],['Publicados',r.posted,'#4f72b8']].map(([label,n,color])=>`<div style="--flow-color:${color}"><strong>${n}</strong><span>${label}</span></div>`).join('')}</div><div class="pipeline-track">${[[r.pending,'#3b82f6'],[created,'#18aa82'],[r.posted,'#4f72b8']].map(([n,color])=>`<span style="width:${r.planned ? n/r.planned*100 : 0}%;background:${color}"></span>`).join('')}</div><p class="insight-takeaway"><strong>${created} conteúdos</strong> aguardam postagem. <strong>${r.overdue} demandas</strong> precisam de atenção ao prazo.</p>`);
+  const gauges=block('Qualidade da execução','Pontualidade, publicação e atenção aos prazos',`<div class="insight-gauges">${[[r.on_time,r.on_time+r.late_delivery,'Pontualidade','#18aa82',r.on_time_rate===null ? '—' : r.on_time_rate+'%',r.undated_delivery+' entregues sem data histórica'],[r.posted,r.planned,'Publicação','#3b82f6',r.planned ? Math.round(r.posted/r.planned*100)+'%' : '—','Publicadas / planejadas'],[r.overdue,r.planned,'Atrasadas','#e16b7e',r.overdue,'Demandas abertas com atraso']].map(([value,total,label,color,display,note])=>`<div>${insightGauge(value,total,label,color,display)}<h3>${label}</h3><small>${esc(note)}</small></div>`).join('')}</div>`);
+  const people=block('Demandas por pessoa','Conteúdos compartilhados aparecem para cada responsável.',`<div class="insight-people">${r.people.map(p=>`<article>${insightGauge(p.delivered,p.planned,p.name,'#3b82f6',p.rate+'%')}<div><h3>${esc(p.name)}</h3><span><b>${p.delivered}</b> de ${p.planned} entregues</span><small>${p.pending} em aberto · ${p.overdue} atrasadas</small></div></article>`).join('') || '<p class="muted">Sem demandas no período.</p>'}</div>`);
+  const channels=block('Distribuição por canal','Cada conteúdo aparece nos canais em que será utilizado.',`<div class="insight-channels">${r.channels.map(ch=>`<article><div class="channel-score"><h3>${esc(ch.name)}</h3><strong>${ch.rate}%</strong></div><div class="track"><div style="width:${ch.rate}%;background:#3b82f6"></div></div><div class="channel-numbers"><span><b>${ch.planned}</b> planejadas</span><span><b>${ch.delivered}</b> entregues</span><span><b>${ch.posted}</b> postadas</span></div></article>`).join('') || '<p class="muted">Sem demandas no período.</p>'}</div>`);
+  return heading('Insights','Da operação à decisão. Sua produção em perspectiva.','<button class="primary" data-action="export-pdf">↓ Exportar apresentação PDF</button>','INTELIGÊNCIA DE PRODUÇÃO')+periodControl()+
+    `<div class="insights-redesign"><section class="insight-hero"><div><span>RITMO DE ENTREGA</span><strong>${r.rate}%</strong></div><div><h2>${r.delivered} de ${r.planned} conteúdos entregues</h2><p>Uma visão da produção, da capacidade do time e das próximas prioridades.</p><small>${fmt(r.start)} — ${fmt(r.end)} · Conteúdos únicos por deadline</small></div></section><div class="insight-stats">${metrics.map(([label,n,note],i)=>`<div class="stat ${i===5 && n ? 'attention-stat' : ''}"><div class="stat-top">${label}</div><div class="stat-num">${n}</div><small>${note}</small></div>`).join('')}</div><div class="grid-two">${donut}${pipeline}</div>`+
+    block('Produção por deadline','Estado atual das entregas de cada dia ou semana.',`<div class="chart-legend"><span>● Planejadas</span><strong>● Entregues</strong></div>${insightTrend(r.daily)}`)+gauges+`<div class="grid-two">${people}${channels}</div><p class="subtitle">Entregues = Criado + Postado. Cada conteúdo conta uma vez no total; a soma por pessoa ou canal pode ser maior. A série usa a deadline, não a data da conclusão. Métricas de audiência das redes sociais não estão incluídas.</p></div>`;
 }
 async function downloadReport(button) {
   button.disabled = true;
@@ -1011,7 +1025,7 @@ function attachComments(id) {
             )
             .join("")
         : '<p class="muted">Ainda não há comentários. Comece a conversa.</p>';
-      await api(`/tasks/${id}/mentions/read`, "POST");
+
     } catch (e) {
       if (section.isConnected)
         section.querySelector(".error").textContent = e.message;
@@ -1035,6 +1049,7 @@ function attachComments(id) {
       selected.clear();
       suggestions.hidden = true;
       await load();
+      await syncMentions();
       toast("Comentário enviado.");
     } catch (err) {
       section.querySelector(".error").textContent = err.message;
@@ -1044,7 +1059,8 @@ function attachComments(id) {
   };
   load();
 }
-function openMentions() {
+async function openMentions() {
+  try { await syncMentions(); } catch(e) { toast(e.message); return; }
   const mentions = data.mentions || [];
   modal(
     "Menções para você",
@@ -1064,9 +1080,14 @@ function openMentions() {
   );
   $$("#modal [data-mention-task]").forEach(
     (b) =>
-      (b.onclick = () => {
-        $("#modal").close();
-        openTask(Number(b.dataset.mentionTask));
+      (b.onclick = async () => {
+        b.disabled=true;
+        try {
+          await api('/tasks/'+b.dataset.mentionTask+'/mentions/read','POST');
+          await syncMentions();
+          $('#modal').close();
+          await openTask(Number(b.dataset.mentionTask));
+        } catch(e) { toast(e.message); b.disabled=false; }
       }),
   );
 }
@@ -1146,4 +1167,11 @@ function dispatchDaily() {
     await api('/integrations/whatsapp/daily','POST',{request_id:requestId});
     toast('Resumo na fila. O envio será processado em até cerca de um minuto.');
   },'Enviar para o grupo');
+}
+
+async function syncMentions() {
+  const result=await api('/mentions');
+  data.mentions=result.mentions;
+  const button=$('.mentions-button');
+  if(button)button.innerHTML='@ Menções'+(result.mentions.length ? ` <span class="count">${result.mentions.length}</span>` : '');
 }

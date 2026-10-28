@@ -66,7 +66,7 @@ with sync_playwright() as pw:
     page.screenshot(path=str(OUT/'dashboard.png'),full_page=True)
     nav('insights');expect(page.get_by_role('heading',name='Insights',exact=True)).to_be_visible()
     expect(page.locator('.insight-stats .stat-num').nth(0)).to_have_text('7');expect(page.locator('.insight-stats .stat-num').nth(1)).to_have_text('1')
-    with page.expect_download() as d:page.get_by_role('button',name='Exportar PDF').click()
+    with page.expect_download() as d:page.get_by_role('button',name='Exportar apresentação PDF').click()
     download=d.value;download.save_as(OUT/'insights.pdf')
     pdf=PdfReader(OUT/'insights.pdf');text=''.join(p.extract_text() for p in pdf.pages)
     assert 'Vídeo multicanal' in text and 'Instagram Teste' in text and 'YouTube Teste' in text
@@ -75,7 +75,7 @@ with sync_playwright() as pw:
     page.get_by_label('Período',exact=True).select_option('custom')
     page.get_by_label('Data final').fill(str(START));page.get_by_label('Data final').press('Tab')
     expect(page.locator('.insight-stats .stat-num').nth(0)).to_have_text('1')
-    with page.expect_download() as d:page.get_by_role('button',name='Exportar PDF').click()
+    with page.expect_download() as d:page.get_by_role('button',name='Exportar apresentação PDF').click()
     assert d.value.suggested_filename==f'contentos-{START}-{START}.pdf'
     page.set_viewport_size({'width':390,'height':844});page.screenshot(path=str(OUT/'mobile-insights.png'),full_page=True)
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')

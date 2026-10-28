@@ -188,3 +188,11 @@ Testes automatizados usam remetentes simulados, sem enviar WhatsApp real. Cobrem
 `tests/browser_daily.py` valida filtro, ordenação/cor do calendário, edição de membro, espaçamento e fluxo do disparo manual em instância vazia na porta 8013 (ou `TEST_URL`). Respostas de envio são simuladas; os testes não enviam mensagens reais ao grupo.
 
 `tests/browser_created.py` valida as três listas, transições Criado/Postado, filtros e persistência após recarregar, em instância isolada vazia na porta 8015 (ou `TEST_URL`).
+
+### Insights para apresentação e caixa de menções
+
+A página Insights usa destaque executivo, cartões de métricas, rosca de status, fluxo de criação/publicação, curva de produção por deadline e indicadores circulares de pontualidade, publicação e atraso. A exportação é uma apresentação PDF horizontal (960 × 600), com a mesma paleta azul e três páginas-base: visão executiva, ritmo/prazos, equipe/canais. Equipes e canais maiores recebem páginas adicionais. O PDF permanece vetorial, pesquisável e sem listar tarefas. Intervalos vazios usam zeros/indicadores sem dados; não inventam métricas. Exportação e página mantêm as definições anteriores de contagem por deadline.
+
+Menções a si mesmo agora são registradas como não lidas. Carregar comentários ou enviar outro comentário não limpa mais os avisos. A leitura acontece ao clicar no aviso da caixa de menções, para o usuário atual. O botão consulta a caixa antes de abrir, e o contador atualiza imediatamente após comentar. Digitar `@Nome Completo` também registra menção quando o nome identifica uma única pessoa; nomes duplicados devem ser escolhidos no seletor. Menções históricas já marcadas como lidas não são restauradas, pois não é possível distinguir as leituras reais das automáticas antigas.
+
+`tests/browser_meeting.py` valida visualização desktop/mobile, download PDF e fluxo de menção a si mesmo (selecionada e digitada), leitura explícita e recarregamento em instância isolada vazia na porta 8016 (ou `TEST_URL`). Os testes de PDF verificam orientação horizontal, ausência de títulos de tarefas, estados vazios e paginação de equipes/canais grandes.

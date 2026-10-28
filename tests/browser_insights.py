@@ -27,11 +27,11 @@ with sync_playwright() as pw:
     page.reload()
     page.locator('.nav [data-page=insights]').click()
     expect(page.locator('.status-donut strong')).to_have_text('10')
-    expect(page.locator('.insight-chart')).to_have_count(5)
+    expect(page.locator('.insight-chart')).to_have_count(6)
     expect(page.locator('body')).not_to_contain_text('Detalhe que não deve aparecer')
     expect(page.locator('body')).not_to_contain_text('Agendado')
     with page.expect_download() as info:
-        page.get_by_role('button',name='Exportar PDF',exact=False).click()
+        page.get_by_role('button',name='Exportar apresentação PDF',exact=False).click()
     assert info.value.failure() is None
     page.screenshot(path='/tmp/contentos-insights-desktop.png',full_page=True)
     page.set_viewport_size({'width':390,'height':844})
