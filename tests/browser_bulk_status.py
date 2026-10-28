@@ -43,14 +43,13 @@ with sync_playwright() as pw:
     expect(page.locator('#modal')).not_to_be_visible()
     assert [t['status'] for t in req('/state')['tasks']].count('Criado')==2
     expect(page.locator('#status-selected')).to_be_disabled()
-    page.locator('#archive-box summary').click()
-    expect(page.locator('#archive-box tr[data-task]')).to_have_count(2)
-    page.locator('#archive-box [data-select-table]').check()
+    expect(page.locator('#created-tasks tr[data-task]')).to_have_count(2)
+    page.locator('#created-tasks [data-select-table]').check()
     page.locator('#status-selected').click()
     page.get_by_label('Novo status',exact=True).select_option('Revisão')
     page.get_by_role('button',name='Aplicar status',exact=True).click()
     expect(page.locator('#modal')).not_to_be_visible()
-    expect(page.locator('#archive-box tr[data-task]')).to_have_count(0)
+    expect(page.locator('#created-tasks tr[data-task]')).to_have_count(0)
     assert [t['status'] for t in req('/state')['tasks']].count('Revisão')==2
     page.locator('[data-select-task]').first.check()
     page.evaluate("Object.defineProperty(navigator, 'clipboard', {value:{writeText:()=>Promise.reject(new Error('denied'))}, configurable:true})")

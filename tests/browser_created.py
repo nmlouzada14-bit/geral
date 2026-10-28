@@ -1,0 +1,52 @@
+"""Run against a fresh isolated instance, never production."""
+import os
+from playwright.sync_api import sync_playwright, expect
+URL=os.environ.get('TEST_URL','http://127.0.0.1:8015')
+with sync_playwright() as pw:
+    browser=pw.chromium.launch(executable_path='/usr/bin/chromium',headless=True,args=['--no-sandbox'])
+    context=browser.new_context();page=context.new_page();errors=[]
+    page.on('pageerror',lambda e:errors.append(str(e)))
+    page.goto(URL)
+    page.get_by_label('Seu e-mail').fill('nmlouzada14@gmail.com')
+    page.get_by_label('Senha',exact=True).fill('Initial-Test-2026!')
+    page.get_by_role('button',name='Entrar no ContentOS').click()
+    page.get_by_label('Senha inicial').fill('Initial-Test-2026!')
+    page.get_by_label('Nova senha pessoal').fill('Personal-Test-2026!')
+    page.get_by_role('button',name='Salvar senha e entrar').click()
+    expect(page.get_by_role('heading',name='Sua produção, em um olhar.')).to_be_visible()
+    def req(path,body=None):
+        r=context.request.fetch(URL+'/api'+path,method='POST' if body is not None else 'GET',data=body,headers={'X-ContentOS':'1'})
+        assert r.ok,r.text()
+        return r.json()
+    today=req('/state')['today']
+    req('/tasks',{'title':'Ainda produzir','deadline':today})
+    req('/tasks',{'title':'Pronto para postar','deadline':today,'status':'Criado'})
+    req('/tasks',{'title':'Já publicado','deadline':today,'status':'Postado'})
+    page.locator('.nav [data-page=tasks]').click()
+    expect(page.locator('#active-tasks tr[data-task]')).to_have_count(1)
+    expect(page.locator('#created-tasks tr[data-task]')).to_be_visible()
+    expect(page.locator('#archive-box')).not_to_have_attribute('open','')
+    expect(page.locator('#archive-box tr[data-task]')).not_to_be_visible()
+    sections=page.locator('#active-tasks, #created-tasks, #archive-box').evaluate_all('(els)=>els.map(e=>e.id)')
+    assert sections==['active-tasks','created-tasks','archive-box']
+    page.locator('#created-tasks tr[data-task]').click()
+    page.get_by_label('Status',exact=True).select_option('Postado')
+    page.get_by_role('button',name='Salvar alterações',exact=True).click()
+    expect(page.locator('#modal')).not_to_be_visible()
+    expect(page.locator('#created-tasks tr[data-task]')).to_have_count(0)
+    expect(page.locator('#archive-box tr[data-task]')).to_have_count(2)
+    expect(page.locator('#archive-box')).not_to_have_attribute('open','')
+    page.locator('#archive-box summary').click()
+    page.locator('#archive-box tr[data-task]').filter(has_text='Pronto para postar').click()
+    page.get_by_label('Status',exact=True).select_option('Criado')
+    page.get_by_role('button',name='Salvar alterações',exact=True).click()
+    expect(page.locator('#created-tasks tr[data-task]')).to_be_visible()
+    page.locator('#filter-status').select_option('Criado')
+    expect(page.locator('#created-tasks tr[data-task]')).to_be_visible()
+    expect(page.locator('#active-tasks tr[data-task]')).to_have_count(0)
+    page.reload()
+    page.locator('.nav [data-page=tasks]').click()
+    expect(page.locator('#created-tasks tr[data-task]')).to_be_visible()
+    assert not errors,errors
+    browser.close()
+print('PASS: created tasks remain visible, posted collapse, transitions, filters and reload.')

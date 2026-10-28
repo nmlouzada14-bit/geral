@@ -461,7 +461,7 @@ class Workflow(unittest.TestCase):
         self.call('patch',f"/tasks/{task['id']}",{'version':1,'status':'Criado'})
         self.assertEqual(len(self.state()['tasks']),2)
         finished=self.state()['tasks'][0]
-        self.assertTrue(finished['archived']);self.assertIsNotNone(finished['completed_at'])
+        self.assertFalse(finished['archived']);self.assertIsNotNone(finished['completed_at'])
         query=f'?start={m.today()}&end={m.today()+timedelta(days=6)}'
         r=self.call('get','/insights'+query)['report']
         self.assertEqual((r['planned'],r['delivered'],r['pending'],r['on_time']),(2,1,1,1))

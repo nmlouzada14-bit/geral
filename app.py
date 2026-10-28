@@ -493,7 +493,7 @@ def enrich_tasks(c, tasks):
         t['channel_ids']=links.get(t['id'],[])
         t['responsible_ids']=people.get(t['id'],[])
         t['attachments']=attachments.get(t['id'],[])
-        t['archived']=t['status'] in DONE
+        t['archived']=t['status']=='Postado'
         t['overdue']=t['deadline']<str(today()) and t['status'] not in DONE
     return tasks
 
